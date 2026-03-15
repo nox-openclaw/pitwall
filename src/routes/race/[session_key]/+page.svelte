@@ -9,6 +9,8 @@
   import StintChart from '$lib/components/StintChart.svelte';
   import PositionChart from '$lib/components/PositionChart.svelte';
   import DriverLegend from '$lib/components/DriverLegend.svelte';
+  import LapRangeSelector from '$lib/components/LapRangeSelector.svelte';
+  import LapTimeSummaryTable from '$lib/components/LapTimeSummaryTable.svelte';
 
   let sessionKey = $derived(Number($page.params.session_key));
 
@@ -72,6 +74,8 @@
 
     return () => clearInterval(interval);
   });
+
+  let maxLap = $derived(laps.length > 0 ? Math.max(...laps.map(l => l.lap_number)) : 60);
 
   function formatDate(dateStr: string): string {
     return new Date(dateStr).toLocaleDateString('en-US', {
@@ -150,15 +154,51 @@
       <!-- Driver legend (shared toggle for all charts) -->
       {#if drivers.length > 0}
         <div class="mb-4">
-          <DriverLegend {drivers} />
+          <DriverLegend {drivers} {laps} />
+        </div>
+      {/if}
+
+      <!-- Pinned annotations summary -->
+      {#if chartState.pinnedAnnotations.length > 0}
+        <div class="mb-4 bg-pit-surface border border-pit-border p-3">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="w-0.5 h-3 bg-pit-accent"></div>
+            <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Pinned Points</h3>
+            <div class="flex-1"></div>
+            <button
+              class="text-[9px] text-pit-text-muted uppercase tracking-wider hover:text-pit-accent transition-colors cursor-pointer font-mono"
+              onclick={() => chartState.clearPins()}
+            >Clear all</button>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            {#each chartState.pinnedAnnotations as pin}
+              <div class="flex items-center gap-1.5 px-2 py-1 text-[9px] font-mono border border-pit-border rounded-sm" style="border-left-color: {pin.color}; border-left-width: 2px;">
+                <div class="w-1.5 h-1.5 rounded-full" style="background: {pin.color}"></div>
+                <span class="text-pit-text">{pin.driver}</span>
+                <span class="text-pit-text-muted">L{pin.lap}</span>
+                <span class="text-pit-text-dim">{pin.value}</span>
+                <span class="text-pit-text-muted text-[8px]">{pin.chartType}</span>
+                <button
+                  class="text-pit-text-muted hover:text-pit-accent cursor-pointer ml-0.5"
+                  onclick={() => chartState.removePin(pin.id)}
+                >×</button>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 
       <div class="space-y-4">
         {#if laps.length > 0}
+          <!-- Lap range selector -->
+          <LapRangeSelector {maxLap} />
+
           <LapTimeChart {laps} {drivers} />
           <GapChart {laps} {drivers} />
           <PositionChart {laps} {drivers} />
+
+          <!-- Lap time summary table -->
+          <LapTimeSummaryTable {laps} {drivers} />
         {:else}
           <div class="bg-pit-surface border border-pit-border p-8 text-center text-pit-text-muted text-xs uppercase tracking-wider">
             No lap data available for this session

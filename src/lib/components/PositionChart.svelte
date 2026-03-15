@@ -2,7 +2,7 @@
   import * as d3 from 'd3';
   import type { Lap, Driver } from '$lib/api';
   import { getTeamColor } from '$lib/colors';
-  import { chartState } from '$lib/chartState.svelte';
+  import { chartState, type PinnedAnnotation } from '$lib/chartState.svelte';
 
   let { laps, drivers }: { laps: Lap[]; drivers: Driver[] } = $props();
 
@@ -14,6 +14,7 @@
   let tooltipLap = $state(0);
   let tooltipValue = $state('');
   let tooltipColor = $state('#fff');
+  let zoomLabel = $state('');
 
   function driverColor(num: number): string {
     const d = drivers.find(d => d.driver_number === num);
@@ -25,27 +26,34 @@
     return d?.name_acronym ?? String(num);
   }
 
+  let pins = $derived(chartState.pinnedAnnotations.filter(p => p.chartType === 'position'));
+
   $effect(() => {
     const _laps = laps;
     const _drivers = drivers;
     void chartState.hiddenDrivers;
+    void chartState.lapRange;
 
     if (!container || !_laps.length) return;
 
     d3.select(container).selectAll('*').remove();
     tooltipVisible = false;
+    zoomLabel = '';
     draw();
 
     return () => { d3.select(container).selectAll('*').remove(); };
   });
 
   function draw() {
-    const valid = laps.filter(l => l.lap_duration && l.lap_duration > 0);
+    const [rangeStart, rangeEnd] = chartState.lapRange;
+    const valid = laps.filter(l => l.lap_duration && l.lap_duration > 0
+      && l.lap_number >= rangeStart && l.lap_number <= rangeEnd);
     if (!valid.length) return;
 
     const allDriverNums = [...new Set(valid.map(l => l.driver_number))];
     const grouped = d3.group(valid, d => d.driver_number);
     const maxLap = d3.max(valid, d => d.lap_number)!;
+    const minLap = d3.min(valid, d => d.lap_number)!;
     const numDrivers = allDriverNums.length;
 
     // Compute cumulative times for position calculation
@@ -68,7 +76,7 @@
       posData.set(num, []);
     }
 
-    for (let lap = 1; lap <= maxLap; lap++) {
+    for (let lap = minLap; lap <= maxLap; lap++) {
       const times: { num: number; time: number }[] = [];
       for (const num of allDriverNums) {
         const t = cumTimes.get(num)?.get(lap);
@@ -91,82 +99,100 @@
       .attr('width', width)
       .attr('height', height);
 
-    const x = d3.scaleLinear().domain([1, maxLap]).range([margin.left, width - margin.right]);
+    const xBase = d3.scaleLinear().domain([minLap, maxLap]).range([margin.left, width - margin.right]);
     const y = d3.scaleLinear().domain([1, numDrivers]).range([margin.top, height - margin.bottom]);
 
-    // Grid lines
-    svg.append('g')
-      .selectAll('line')
-      .data(d3.range(1, numDrivers + 1))
-      .join('line')
-      .attr('x1', margin.left)
-      .attr('x2', width - margin.right)
-      .attr('y1', d => y(d))
-      .attr('y2', d => y(d))
-      .attr('stroke', '#1E1E1E')
-      .attr('stroke-width', 0.5);
+    // Clip path
+    svg.append('defs').append('clipPath').attr('id', 'clip-pos')
+      .append('rect')
+      .attr('x', margin.left).attr('y', margin.top)
+      .attr('width', width - margin.left - margin.right)
+      .attr('height', height - margin.top - margin.bottom);
 
-    // Axes
-    svg.append('g')
-      .attr('transform', `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(x).ticks(10).tickSize(0))
-      .call(g => g.select('.domain').attr('stroke', '#2A2A2A'))
-      .call(g => g.selectAll('text').attr('fill', '#6B6B6B').attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace'));
+    const chartArea = svg.append('g').attr('clip-path', 'url(#clip-pos)');
+    let x = xBase.copy();
 
-    svg.append('g')
-      .attr('transform', `translate(${margin.left},0)`)
-      .call(d3.axisLeft(y).ticks(Math.min(numDrivers, 20)).tickFormat(d => `P${d as number}`).tickSize(0))
-      .call(g => g.select('.domain').attr('stroke', '#2A2A2A'))
-      .call(g => g.selectAll('text').attr('fill', '#6B6B6B').attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace'));
+    function drawContent() {
+      chartArea.selectAll('*').remove();
 
-    const line = d3.line<PosPoint>()
-      .x(d => x(d.lap))
-      .y(d => y(d.position))
-      .curve(d3.curveMonotoneX);
+      // Grid lines
+      chartArea.append('g')
+        .selectAll('line')
+        .data(d3.range(1, numDrivers + 1))
+        .join('line')
+        .attr('x1', margin.left).attr('x2', width - margin.right)
+        .attr('y1', d => y(d)).attr('y2', d => y(d))
+        .attr('stroke', '#1E1E1E').attr('stroke-width', 0.5);
 
-    // Find race leader (P1 at final lap)
-    let leaderNum = allDriverNums[0];
-    for (const num of allDriverNums) {
-      const data = posData.get(num)!;
-      const lastPos = data.at(-1);
-      if (lastPos && lastPos.position === 1) {
-        leaderNum = num;
-        break;
+      const line = d3.line<PosPoint>()
+        .x(d => x(d.lap))
+        .y(d => y(d.position))
+        .curve(d3.curveMonotoneX);
+
+      // Find race leader
+      let leaderNum = allDriverNums[0];
+      for (const num of allDriverNums) {
+        const data = posData.get(num)!;
+        const lastPos = data.at(-1);
+        if (lastPos && lastPos.position === 1) { leaderNum = num; break; }
+      }
+
+      const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
+
+      for (const num of visibleNums) {
+        const data = posData.get(num)!;
+        const color = driverColor(num);
+        const isLeader = num === leaderNum;
+
+        chartArea.append('path')
+          .datum(data)
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', isLeader ? '#E8002D' : color)
+          .attr('stroke-width', isLeader ? 2 : 1.2)
+          .attr('opacity', isLeader ? 1 : 0.6);
+
+        const last = data.at(-1);
+        if (last) {
+          chartArea.append('text')
+            .attr('x', x(last.lap) + 6).attr('y', y(last.position))
+            .attr('fill', isLeader ? '#E8002D' : color)
+            .attr('font-size', '9').attr('font-weight', isLeader ? '700' : '500')
+            .attr('font-family', 'JetBrains Mono, monospace')
+            .attr('dominant-baseline', 'middle')
+            .text(driverName(num));
+        }
+      }
+
+      // Pinned annotations
+      for (const pin of chartState.pinnedAnnotations.filter(p => p.chartType === 'position')) {
+        const data = posData.get(pin.driverNum);
+        if (!data) continue;
+        const point = data.find(d => d.lap === pin.lap);
+        if (!point) continue;
+        chartArea.append('circle')
+          .attr('cx', x(pin.lap)).attr('cy', y(point.position)).attr('r', 5)
+          .attr('fill', pin.color).attr('stroke', '#fff').attr('stroke-width', 1.5);
       }
     }
 
-    // Filter visible drivers
-    const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
+    const xAxisG = svg.append('g').attr('transform', `translate(0,${height - margin.bottom})`);
+    const yAxisG = svg.append('g').attr('transform', `translate(${margin.left},0)`);
 
-    for (const num of visibleNums) {
-      const data = posData.get(num)!;
-      const color = driverColor(num);
-      const isLeader = num === leaderNum;
+    function drawAxes() {
+      xAxisG.call(d3.axisBottom(x).ticks(10).tickSize(0))
+        .call(g => g.select('.domain').attr('stroke', '#2A2A2A'))
+        .call(g => g.selectAll('text').attr('fill', '#6B6B6B').attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace'));
 
-      svg.append('path')
-        .datum(data)
-        .attr('d', line)
-        .attr('fill', 'none')
-        .attr('stroke', isLeader ? '#E8002D' : color)
-        .attr('stroke-width', isLeader ? 2 : 1.2)
-        .attr('opacity', isLeader ? 1 : 0.6);
-
-      // Label at end
-      const last = data.at(-1);
-      if (last) {
-        svg.append('text')
-          .attr('x', x(last.lap) + 6)
-          .attr('y', y(last.position))
-          .attr('fill', isLeader ? '#E8002D' : color)
-          .attr('font-size', '9')
-          .attr('font-weight', isLeader ? '700' : '500')
-          .attr('font-family', 'JetBrains Mono, monospace')
-          .attr('dominant-baseline', 'middle')
-          .text(driverName(num));
-      }
+      yAxisG.call(d3.axisLeft(y).ticks(Math.min(numDrivers, 20)).tickFormat(d => `P${d as number}`).tickSize(0))
+        .call(g => g.select('.domain').attr('stroke', '#2A2A2A'))
+        .call(g => g.selectAll('text').attr('fill', '#6B6B6B').attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace'));
     }
 
-    // Hover focus elements
+    drawContent();
+    drawAxes();
+
+    // Hover elements
     const focus = svg.append('g').style('display', 'none');
     focus.append('line')
       .attr('y1', margin.top).attr('y2', height - margin.bottom)
@@ -174,7 +200,30 @@
     focus.append('circle')
       .attr('r', 4).attr('fill', '#1E1E1E').attr('stroke', '#E8002D').attr('stroke-width', 1.5);
 
-    // Overlay for mouse tracking
+    // Zoom
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([1, 20])
+      .translateExtent([[margin.left, 0], [width - margin.right, height]])
+      .extent([[margin.left, 0], [width - margin.right, height]])
+      .on('zoom', (event) => {
+        x = event.transform.rescaleX(xBase);
+        drawContent();
+        drawAxes();
+        const domain = x.domain();
+        const l1 = Math.max(Math.round(domain[0]), minLap);
+        const l2 = Math.min(Math.round(domain[1]), maxLap);
+        if (l1 !== minLap || l2 !== maxLap) {
+          zoomLabel = `Laps ${l1}–${l2}`;
+        } else {
+          zoomLabel = '';
+        }
+      });
+
+    svg.call(zoom).on('dblclick.zoom', () => {
+      svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+    });
+
+    // Mouse overlay
     svg.append('rect')
       .attr('x', margin.left).attr('y', margin.top)
       .attr('width', width - margin.left - margin.right)
@@ -184,8 +233,12 @@
       .on('mousemove', (event: MouseEvent) => {
         const [mx, my] = d3.pointer(event, svg.node());
         const lapNum = Math.round(x.invert(mx));
-        if (lapNum < 1 || lapNum > maxLap) { focus.style('display', 'none'); tooltipVisible = false; return; }
+        const [dStart, dEnd] = x.domain();
+        if (lapNum < Math.round(dStart) || lapNum > Math.round(dEnd)) {
+          focus.style('display', 'none'); tooltipVisible = false; return;
+        }
 
+        const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
         let closest: { num: number; position: number; yPos: number } | null = null;
         let minDist = Infinity;
 
@@ -195,10 +248,7 @@
           if (point) {
             const yPos = y(point.position);
             const dist = Math.abs(my - yPos);
-            if (dist < minDist) {
-              minDist = dist;
-              closest = { num, position: point.position, yPos };
-            }
+            if (dist < minDist) { minDist = dist; closest = { num, position: point.position, yPos }; }
           }
         }
 
@@ -207,7 +257,6 @@
           focus.select('line').attr('x1', x(lapNum)).attr('x2', x(lapNum));
           focus.select('circle').attr('cx', x(lapNum)).attr('cy', closest.yPos)
             .attr('stroke', driverColor(closest.num));
-
           const cw = container.clientWidth;
           tooltipX = x(lapNum) > cw * 0.65 ? x(lapNum) - 140 : x(lapNum) + 14;
           tooltipY = closest.yPos - 10;
@@ -221,19 +270,38 @@
           tooltipVisible = false;
         }
       })
-      .on('mouseleave', () => {
-        focus.style('display', 'none');
-        tooltipVisible = false;
+      .on('mouseleave', () => { focus.style('display', 'none'); tooltipVisible = false; })
+      .on('click', (event: MouseEvent) => {
+        const [mx, my] = d3.pointer(event, svg.node());
+        const lapNum = Math.round(x.invert(mx));
+        const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
+        let closest: { num: number; position: number } | null = null;
+        let minDist = Infinity;
+        for (const num of visibleNums) {
+          const point = posData.get(num)!.find(d => d.lap === lapNum);
+          if (point) {
+            const dist = Math.abs(my - y(point.position));
+            if (dist < minDist) { minDist = dist; closest = { num, position: point.position }; }
+          }
+        }
+        if (closest && minDist < 50) {
+          chartState.addPin({
+            id: `pos-${closest.num}-${lapNum}`,
+            driver: driverName(closest.num),
+            driverNum: closest.num,
+            lap: lapNum,
+            value: `P${closest.position}`,
+            color: driverColor(closest.num),
+            chartType: 'position',
+          });
+        }
       });
 
     // Axis label
     svg.append('text')
-      .attr('x', width / 2)
-      .attr('y', height - 4)
-      .attr('fill', '#6B6B6B')
-      .attr('text-anchor', 'middle')
-      .attr('font-size', '10')
-      .attr('font-family', 'JetBrains Mono, monospace')
+      .attr('x', width / 2).attr('y', height - 4)
+      .attr('fill', '#6B6B6B').attr('text-anchor', 'middle')
+      .attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace')
       .attr('text-transform', 'uppercase')
       .text('LAP');
   }
@@ -243,6 +311,11 @@
   <div class="flex items-center gap-2 mb-3">
     <div class="w-0.5 h-3 bg-pit-accent"></div>
     <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Race Position</h3>
+    <div class="flex-1"></div>
+    {#if zoomLabel}
+      <span class="text-[9px] font-mono text-pit-accent">{zoomLabel}</span>
+    {/if}
+    <span class="text-[8px] text-pit-text-muted font-mono">scroll to zoom · drag to pan · dblclick reset</span>
   </div>
   <div class="relative">
     <div
@@ -255,7 +328,21 @@
       </div>
       <div class="text-[#6B6B6B]">Lap {tooltipLap}</div>
       <div class="text-white font-semibold">{tooltipValue}</div>
+      <div class="text-[#6B6B6B] text-[8px] mt-0.5">click to pin</div>
     </div>
-    <div bind:this={container} class="w-full overflow-x-auto"></div>
+    {#each pins as pin}
+      <div
+        class="absolute z-20 px-2 py-1 text-[9px] font-mono border rounded-sm flex items-center gap-1.5"
+        style="top: 4px; left: {pins.indexOf(pin) * 130 + 70}px; background: #1E1E1E; border-color: {pin.color}; color: white;"
+      >
+        <div class="w-1.5 h-1.5 rounded-full" style="background: {pin.color}"></div>
+        <span>{pin.driver} L{pin.lap} {pin.value}</span>
+        <button
+          class="text-pit-text-muted hover:text-pit-accent cursor-pointer ml-1 text-[10px] leading-none"
+          onclick={() => chartState.removePin(pin.id)}
+        >×</button>
+      </div>
+    {/each}
+    <div bind:this={container} class="w-full overflow-hidden"></div>
   </div>
 </div>
