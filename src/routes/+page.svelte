@@ -10,7 +10,7 @@
 
   onMount(async () => {
     try {
-      const all = await getSessions({ year: 2024 });
+      const all = await getSessions({ year: 2026 });
       sessions = all
         .filter(s => s.session_type === 'Race')
         .sort((a, b) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime());
@@ -77,7 +77,7 @@
   <!-- Section Header -->
   <div class="flex items-center gap-3 mb-6">
     <div class="w-1 h-5 bg-pit-accent"></div>
-    <h1 class="heading-f1 text-xl text-pit-text">2024 Race Calendar</h1>
+    <h1 class="heading-f1 text-xl text-pit-text">2026 Race Calendar</h1>
     <div class="flex-1 h-px bg-pit-border"></div>
     <span class="text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">{sessions.length} Rounds</span>
   </div>

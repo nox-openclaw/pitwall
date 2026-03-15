@@ -25,7 +25,7 @@
 <div class="max-w-7xl mx-auto px-4 py-6">
   <div class="flex items-center gap-3 mb-6">
     <div class="w-1 h-5 bg-pit-accent"></div>
-    <h1 class="heading-f1 text-xl text-pit-text">2024 Driver Lineup</h1>
+    <h1 class="heading-f1 text-xl text-pit-text">2026 Driver Lineup</h1>
     <div class="flex-1 h-px bg-pit-border"></div>
     <span class="text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">{drivers.length} Drivers</span>
   </div>
