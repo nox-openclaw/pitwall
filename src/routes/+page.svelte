@@ -29,8 +29,9 @@
   };
 
   // Circuit short name → local image filename (without .png)
-  // Austin and Baku intentionally omitted (no image available)
   const CIRCUIT_IMAGE: Record<string, string> = {
+    'Austin': 'austin',
+    'Baku': 'baku',
     'Melbourne': 'melbourne',
     'Sakhir': 'bahrain',
     'Bahrain': 'bahrain',
@@ -111,10 +112,11 @@
       const meetingList: Meeting[] = [];
       let round = 0;
       for (const [meetingKey, sessionList] of meetingMap) {
-        const race = sessionList.find(s => s.session_type === 'Race');
+        const race = sessionList.find(s => s.session_type === 'Race' && s.session_name === 'Race');
         if (!race) continue;
+        console.log('Circuit:', race.circuit_short_name, '→ image:', CIRCUIT_IMAGE[race.circuit_short_name] ?? 'MISSING');
         round++;
-        const sprint = sessionList.find(s => s.session_type === 'Sprint') ?? null;
+        const sprint = sessionList.find(s => s.session_name === 'Sprint') ?? null;
         meetingList.push({
           meeting_key: meetingKey,
           race,
