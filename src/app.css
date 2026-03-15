@@ -1,20 +1,22 @@
 @import "tailwindcss";
 
 @theme {
-  --color-pit-bg: #0a0a0f;
-  --color-pit-surface: #12121a;
-  --color-pit-surface-2: #1a1a26;
-  --color-pit-border: #2a2a3a;
-  --color-pit-accent: #e10600;
-  --color-pit-accent-glow: #ff1a1a;
-  --color-pit-text: #e8e8f0;
-  --color-pit-text-dim: #8888a0;
-  --color-pit-green: #00d26a;
-  --color-pit-yellow: #ffd700;
-  --color-pit-blue: #00bfff;
-  --color-pit-purple: #a855f7;
+  --color-pit-bg: #0A0A0A;
+  --color-pit-surface: #1E1E1E;
+  --color-pit-surface-2: #252525;
+  --color-pit-border: #2A2A2A;
+  --color-pit-accent: #E8002D;
+  --color-pit-accent-glow: rgba(232, 0, 45, 0.4);
+  --color-pit-text: #FFFFFF;
+  --color-pit-text-dim: #C0C0C0;
+  --color-pit-text-muted: #6B6B6B;
+  --color-pit-green: #00D26A;
+  --color-pit-yellow: #FFD700;
+  --color-pit-blue: #00BFFF;
+  --color-pit-purple: #A855F7;
 
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-heading: 'Barlow Condensed', 'Inter', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
@@ -22,11 +24,14 @@ body {
   background-color: var(--color-pit-bg);
   color: var(--color-pit-text);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -35,5 +40,72 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-pit-border);
-  border-radius: 3px;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3A3A3A;
+}
+
+/* Selection */
+::selection {
+  background: rgba(232, 0, 45, 0.3);
+  color: #FFFFFF;
+}
+
+/* Telemetry heading style */
+.heading-f1 {
+  font-family: var(--font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+/* Monospace data style */
+.data-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Red glow effect for active/highlighted elements */
+.glow-red {
+  box-shadow: 0 0 8px rgba(232, 0, 45, 0.4);
+}
+
+.glow-red-subtle {
+  box-shadow: 0 0 12px rgba(232, 0, 45, 0.2);
+}
+
+/* Thin separator line */
+.border-telemetry {
+  border-color: var(--color-pit-border);
+  border-width: 1px;
+}
+
+/* Card hover glow */
+.card-hover:hover {
+  border-color: rgba(232, 0, 45, 0.5);
+  box-shadow: 0 0 8px rgba(232, 0, 45, 0.15);
+}
+
+/* Spinner */
+.spinner-f1 {
+  border: 2px solid var(--color-pit-border);
+  border-top-color: var(--color-pit-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Pulse animation for live indicators */
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.pulse-live {
+  animation: pulse-red 2s ease-in-out infinite;
 }
