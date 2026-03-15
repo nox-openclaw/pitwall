@@ -98,6 +98,11 @@
     // Abu Dhabi
     'Yas Island': 'yas_marina',
     'Yas Marina': 'yas_marina',
+    'Yas Marina Circuit': 'yas_marina',
+    'Spa-Francorchamps': 'spa',
+    'Hungaroring': 'budapest',
+    'Baku': 'baku',
+    'Austin': 'austin',
     'Abu Dhabi': 'yas_marina',
   };
 
