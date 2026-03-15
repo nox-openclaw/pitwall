@@ -28,8 +28,8 @@
           class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
         >Races</a>
         <a
-          href="/drivers"
-          class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/drivers' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
+          href="/championship"
+          class="px-3 py-1.5 transition-colors duration-150 {currentPath === "/championship"
         >Championship</a>
         <a
           href="/predictions"
