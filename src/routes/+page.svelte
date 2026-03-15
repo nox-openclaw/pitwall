@@ -56,7 +56,6 @@
     'Catalunya': 'catalunya',
     'Montmeló': 'catalunya',
     'Montmelo': 'catalunya',
-    'Madrid': 'madring',
     // Canada
     'Montréal': 'montreal',
     'Montreal': 'montreal',
@@ -82,7 +81,6 @@
     'Marina Bay': 'singapore',
     // USA - Austin
     'Austin': 'austin',
-    'Madring': 'madring',
     'COTA': 'austin',
     // Mexico
     'Mexico City': 'mexico_city',
@@ -298,6 +296,10 @@
           alt=""
           class="absolute right-0 top-0 h-full w-auto opacity-[0.25] object-contain pointer-events-none select-none"
         />
+      {:else}
+        <div class="absolute right-0 top-0 h-full w-32 flex items-center justify-center pointer-events-none select-none" style="background:#1a1a2e;">
+          <span class="heading-f1 text-xs uppercase tracking-wider" style="color:#E8002D;">Coming Soon</span>
+        </div>
       {/if}
 
       <div class="p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 relative z-10">
@@ -398,6 +400,10 @@
               alt=""
               class="absolute right-0 top-0 h-full w-auto opacity-[0.20] group-hover:opacity-[0.35] object-contain pointer-events-none select-none transition-opacity duration-300"
             />
+          {:else}
+            <div class="absolute right-0 top-0 h-full w-24 flex items-center justify-center pointer-events-none select-none" style="background:#1a1a2e;">
+              <span class="heading-f1 text-[9px] uppercase tracking-wider" style="color:#E8002D;">Coming Soon</span>
+            </div>
           {/if}
 
           <div class="relative z-10">
