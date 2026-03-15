@@ -4,7 +4,13 @@
   import { getTeamColor } from '$lib/colors';
   import { chartState, type PinnedAnnotation } from '$lib/chartState.svelte';
 
-  let { laps, drivers }: { laps: Lap[]; drivers: Driver[] } = $props();
+  let { laps, drivers, comparisonLaps = [], comparisonDrivers = [], comparisonLabel = '' }: {
+    laps: Lap[];
+    drivers: Driver[];
+    comparisonLaps?: Lap[];
+    comparisonDrivers?: Driver[];
+    comparisonLabel?: string;
+  } = $props();
 
   let container: HTMLDivElement;
   let tooltipX = $state(0);
@@ -37,6 +43,8 @@
   $effect(() => {
     const _laps = laps;
     const _drivers = drivers;
+    const _compLaps = comparisonLaps;
+    const _compDrivers = comparisonDrivers;
     void chartState.hiddenDrivers;
     void chartState.lapRange;
 
@@ -149,6 +157,58 @@
             .attr('font-family', 'JetBrains Mono, monospace')
             .attr('dominant-baseline', 'middle')
             .text(driverName(num));
+        }
+      }
+
+      // Draw comparison overlay (fastest driver from comparison year)
+      if (comparisonLaps.length > 0) {
+        const compValid = comparisonLaps.filter(l => l.lap_duration && l.lap_duration > 0 && !l.is_pit_out_lap
+          && l.lap_number >= rangeStart && l.lap_number <= rangeEnd);
+        if (compValid.length > 0) {
+          const compGrouped = d3.group(compValid, d => d.driver_number);
+          // Find fastest driver (lowest total duration)
+          let fastestNum = 0;
+          let fastestTotal = Infinity;
+          for (const [num, data] of compGrouped) {
+            const total = d3.sum(data, d => d.lap_duration ?? 0);
+            if (total < fastestTotal && total > 0) {
+              fastestTotal = total;
+              fastestNum = num;
+            }
+          }
+          if (fastestNum) {
+            const fastData = compGrouped.get(fastestNum)!.sort((a, b) => a.lap_number - b.lap_number);
+            const compDriver = comparisonDrivers.find(d => d.driver_number === fastestNum);
+            const compName = compDriver?.name_acronym ?? String(fastestNum);
+
+            const compLine = d3.line<Lap>()
+              .defined(d => d.lap_duration != null && d.lap_duration > yMin && d.lap_duration < yMax)
+              .x(d => x(d.lap_number))
+              .y(d => y(d.lap_duration!))
+              .curve(d3.curveMonotoneX);
+
+            chartArea.append('path')
+              .datum(fastData)
+              .attr('d', compLine)
+              .attr('fill', 'none')
+              .attr('stroke', '#FFD700')
+              .attr('stroke-width', 2)
+              .attr('stroke-dasharray', '6,3')
+              .attr('opacity', 0.8);
+
+            const compLast = fastData[fastData.length - 1];
+            if (compLast?.lap_duration && compLast.lap_duration > yMin && compLast.lap_duration < yMax) {
+              chartArea.append('text')
+                .attr('x', x(compLast.lap_number) + 6)
+                .attr('y', y(compLast.lap_duration!) - 10)
+                .attr('fill', '#FFD700')
+                .attr('font-size', '9')
+                .attr('font-weight', '700')
+                .attr('font-family', 'JetBrains Mono, monospace')
+                .attr('dominant-baseline', 'middle')
+                .text(`${compName} (${comparisonLabel})`);
+            }
+          }
         }
       }
 
@@ -336,6 +396,12 @@
     <div class="w-0.5 h-3 bg-pit-accent"></div>
     <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Lap Times</h3>
     <div class="flex-1"></div>
+    {#if comparisonLabel}
+      <span class="flex items-center gap-1.5 text-[9px] font-mono text-[#FFD700]">
+        <span class="inline-block w-4 border-t-2 border-dashed border-[#FFD700]"></span>
+        {comparisonLabel} fastest
+      </span>
+    {/if}
     {#if zoomLabel}
       <span class="text-[9px] font-mono text-pit-accent">{zoomLabel}</span>
     {/if}

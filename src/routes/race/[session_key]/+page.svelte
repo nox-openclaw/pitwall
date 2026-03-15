@@ -53,6 +53,7 @@
     return `/circuits/${mapped}.png`;
   }
 
+  // --- Primary session state (from URL session_key) ---
   let session = $state<Session | null>(null);
   let drivers = $state<Driver[]>([]);
   let laps = $state<Lap[]>([]);
@@ -61,16 +62,50 @@
   let error = $state('');
   let dataReady = $state(false);
 
+  // --- Year selector state ---
+  let availableYears = $state<number[]>([]);
+  let yearSessions = $state<Map<number, Session>>(new Map());
+  let selectedYear = $state<number>(0);
+  let yearLoading = $state(false);
+
+  // Data for the currently viewed year (may differ from primary session)
+  let viewDrivers = $state<Driver[]>([]);
+  let viewLaps = $state<Lap[]>([]);
+  let viewStints = $state<Stint[]>([]);
+  let viewSession = $state<Session | null>(null);
+
+  // --- Comparison mode state ---
+  let showComparison = $state(false);
+  let comparisonLaps = $state<Lap[]>([]);
+  let comparisonDrivers = $state<Driver[]>([]);
+  let comparisonYear = $state<number>(0);
+
   let isLive = $derived(() => {
-    if (!session?.date_start) return false;
-    const start = new Date(session.date_start).getTime();
+    if (!viewSession?.date_start) return false;
+    const start = new Date(viewSession.date_start).getTime();
     const now = Date.now();
     const fourHours = 4 * 60 * 60 * 1000;
     return start <= now && (now - start) <= fourHours;
   });
 
+  // Is the selected year's session upcoming (hasn't happened yet)?
+  let isUpcoming = $derived(() => {
+    if (!viewSession?.date_start) return false;
+    return new Date(viewSession.date_start).getTime() > Date.now();
+  });
+
+  // The primary session year (from URL)
+  let primaryYear = $derived(session?.year ?? 0);
+
+  // Whether viewing a historical year (not the primary session's year)
+  let isHistorical = $derived(selectedYear !== 0 && selectedYear !== primaryYear);
+
+  // Can show comparison toggle: primary year has data AND a different year is selected with data
+  let canCompare = $derived(
+    isHistorical && laps.length > 0 && viewLaps.length > 0
+  );
+
   onMount(async () => {
-    // Reset hidden drivers when navigating to a new session
     chartState.reset();
 
     try {
@@ -85,7 +120,19 @@
       drivers = uniqueDrivers(driversData);
       laps = lapsData;
       stints = stintsData;
+
+      // Initialize view data to primary session
+      viewSession = session;
+      viewDrivers = drivers;
+      viewLaps = laps;
+      viewStints = stints;
+      selectedYear = session?.year ?? 0;
       dataReady = true;
+
+      // Fetch available years for this circuit
+      if (session?.circuit_short_name) {
+        fetchAvailableYears(session.circuit_short_name, session.session_type);
+      }
     } catch (e) {
       error = 'Failed to load race data. This session may not exist or the API may be unavailable.';
       console.error(e);
@@ -94,9 +141,97 @@
     }
   });
 
+  async function fetchAvailableYears(circuitName: string, sessionType: string) {
+    try {
+      // Fetch all sessions for this circuit across years
+      const allSessions = await getSessions({
+        circuit_short_name: circuitName,
+        session_type: sessionType,
+      });
+
+      const yearMap = new Map<number, Session>();
+      for (const s of allSessions) {
+        // Keep one session per year (prefer the one closest to the primary)
+        if (!yearMap.has(s.year)) {
+          yearMap.set(s.year, s);
+        }
+      }
+
+      yearSessions = yearMap;
+      availableYears = [...yearMap.keys()].sort((a, b) => a - b);
+    } catch (e) {
+      console.error('Failed to fetch year data:', e);
+    }
+  }
+
+  async function selectYear(year: number) {
+    if (year === selectedYear) return;
+
+    showComparison = false;
+    comparisonLaps = [];
+    comparisonDrivers = [];
+    selectedYear = year;
+    chartState.reset();
+    chartState.clearPins();
+
+    // If selecting the primary session year, restore original data
+    if (year === primaryYear) {
+      viewSession = session;
+      viewDrivers = drivers;
+      viewLaps = laps;
+      viewStints = stints;
+      return;
+    }
+
+    // Load data for the selected year
+    const targetSession = yearSessions.get(year);
+    if (!targetSession) return;
+
+    yearLoading = true;
+    try {
+      const [driversData, lapsData, stintsData] = await Promise.all([
+        getDrivers(targetSession.session_key),
+        getLaps(targetSession.session_key),
+        getStints(targetSession.session_key),
+      ]);
+
+      viewSession = targetSession;
+      viewDrivers = uniqueDrivers(driversData);
+      viewLaps = lapsData;
+      viewStints = stintsData;
+    } catch (e) {
+      console.error('Failed to load year data:', e);
+      // Fall back to primary
+      viewSession = session;
+      viewDrivers = drivers;
+      viewLaps = laps;
+      viewStints = stints;
+      selectedYear = primaryYear;
+    } finally {
+      yearLoading = false;
+    }
+  }
+
+  async function toggleComparison() {
+    if (showComparison) {
+      showComparison = false;
+      comparisonLaps = [];
+      comparisonDrivers = [];
+      return;
+    }
+
+    // Load the primary year's data as comparison data
+    comparisonYear = primaryYear;
+    comparisonLaps = laps;
+    comparisonDrivers = drivers;
+    showComparison = true;
+  }
+
   // Live polling: auto-refresh data every 10 seconds when session is active
   $effect(() => {
-    if (!isLive() || !session) return;
+    if (!isLive() || !viewSession) return;
+    // Only poll if viewing the primary session
+    if (viewSession.session_key !== sessionKey) return;
 
     const interval = setInterval(async () => {
       try {
@@ -106,6 +241,11 @@
         ]);
         laps = lapsData;
         stints = stintsData;
+        // Update view data if still viewing primary
+        if (selectedYear === primaryYear) {
+          viewLaps = lapsData;
+          viewStints = stintsData;
+        }
       } catch (e) {
         console.error('Live polling error:', e);
       }
@@ -114,7 +254,7 @@
     return () => clearInterval(interval);
   });
 
-  let maxLap = $derived(laps.length > 0 ? Math.max(...laps.map(l => l.lap_number)) : 60);
+  let maxLap = $derived(viewLaps.length > 0 ? Math.max(...viewLaps.map(l => l.lap_number)) : 60);
 
   function formatDate(dateStr: string): string {
     return new Date(dateStr).toLocaleDateString('en-US', {
@@ -155,7 +295,7 @@
         <div class="absolute bottom-0 left-0 right-0 p-6 z-10">
           <div class="flex items-center gap-3 mb-2">
             <div class="w-1 h-6 bg-pit-accent"></div>
-            <span class="text-[10px] uppercase tracking-widest text-pit-accent font-semibold data-mono">{session.session_type}</span>
+            <span class="text-[10px] uppercase tracking-widest text-pit-accent font-semibold data-mono">{viewSession?.session_type ?? session.session_type}</span>
             <div class="flex-1"></div>
             {#if isLive()}
               <div class="flex items-center gap-1.5">
@@ -173,7 +313,7 @@
             {session.country_name} Grand Prix
           </h1>
           <p class="text-xs text-pit-text-muted font-mono tracking-wide">
-            {session.circuit_short_name} &middot; {formatDate(session.date_start)}
+            {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
           </p>
         </div>
       </div>
@@ -182,7 +322,7 @@
       <div class="mb-8 border-b border-pit-border pb-6">
         <div class="flex items-center gap-3 mb-2">
           <div class="w-1 h-6 bg-pit-accent"></div>
-          <span class="text-[10px] uppercase tracking-widest text-pit-accent font-semibold data-mono">{session.session_type}</span>
+          <span class="text-[10px] uppercase tracking-widest text-pit-accent font-semibold data-mono">{viewSession?.session_type ?? session.session_type}</span>
           <div class="flex-1"></div>
           {#if isLive()}
             <div class="flex items-center gap-1.5">
@@ -200,8 +340,59 @@
           {session.country_name} Grand Prix
         </h1>
         <p class="text-xs text-pit-text-muted font-mono tracking-wide">
-          {session.circuit_short_name} &middot; {formatDate(session.date_start)}
+          {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
         </p>
+      </div>
+    {/if}
+
+    <!-- Year selector tabs -->
+    {#if availableYears.length > 1}
+      <div class="flex items-center gap-0 mb-6 border-b border-pit-border">
+        <div class="flex items-center gap-2 mr-4">
+          <div class="w-0.5 h-3 bg-pit-accent"></div>
+          <span class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Season</span>
+        </div>
+        {#each availableYears as year}
+          <button
+            class="px-5 py-2.5 text-[11px] uppercase tracking-widest font-bold border-b-2 -mb-px transition-colors cursor-pointer {selectedYear === year ? 'text-pit-accent border-pit-accent' : 'text-pit-text-muted border-transparent hover:text-pit-text-dim'}"
+            onclick={() => selectYear(year)}
+            disabled={yearLoading}
+          >
+            {year}
+          </button>
+        {/each}
+        {#if yearLoading}
+          <div class="ml-3 flex items-center gap-2">
+            <div class="w-4 h-4 spinner-f1"></div>
+            <span class="text-[9px] text-pit-text-muted uppercase tracking-wider">Loading...</span>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Upcoming banner -->
+    {#if isHistorical && isUpcoming()}
+      <div class="mb-6 bg-pit-surface border border-pit-accent/30 p-4 flex items-center gap-3">
+        <div class="w-1 h-8 bg-pit-accent"></div>
+        <div>
+          <p class="text-[11px] font-bold uppercase tracking-widest text-pit-accent">Upcoming</p>
+          <p class="text-[10px] text-pit-text-muted mt-0.5">
+            {selectedYear} session hasn't happened yet — showing {primaryYear} historical data
+          </p>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Showing historical data banner -->
+    {#if isHistorical && !isUpcoming()}
+      <div class="mb-6 bg-pit-surface border border-pit-border p-4 flex items-center gap-3">
+        <div class="w-1 h-8 bg-pit-blue"></div>
+        <div>
+          <p class="text-[11px] font-bold uppercase tracking-widest text-pit-blue">Historical</p>
+          <p class="text-[10px] text-pit-text-muted mt-0.5">
+            Showing {selectedYear} {viewSession?.circuit_short_name} data
+          </p>
+        </div>
       </div>
     {/if}
 
@@ -209,27 +400,47 @@
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-pit-border mb-8">
       <div class="bg-pit-bg p-4">
         <p class="text-[10px] text-pit-text-muted uppercase tracking-widest mb-1">Drivers</p>
-        <p class="text-2xl font-bold data-mono text-pit-text">{drivers.length}</p>
+        <p class="text-2xl font-bold data-mono text-pit-text">{viewDrivers.length}</p>
       </div>
       <div class="bg-pit-bg p-4">
         <p class="text-[10px] text-pit-text-muted uppercase tracking-widest mb-1">Total Laps</p>
-        <p class="text-2xl font-bold data-mono text-pit-text">{laps.length > 0 ? Math.max(...laps.map(l => l.lap_number)) : '-'}</p>
+        <p class="text-2xl font-bold data-mono text-pit-text">{viewLaps.length > 0 ? Math.max(...viewLaps.map(l => l.lap_number)) : '-'}</p>
       </div>
       <div class="bg-pit-bg p-4">
         <p class="text-[10px] text-pit-text-muted uppercase tracking-widest mb-1">Pit Stops</p>
-        <p class="text-2xl font-bold data-mono text-pit-text">{stints.length > 0 ? stints.filter(s => s.stint_number > 1).length : '-'}</p>
+        <p class="text-2xl font-bold data-mono text-pit-text">{viewStints.length > 0 ? viewStints.filter(s => s.stint_number > 1).length : '-'}</p>
       </div>
       <div class="bg-pit-bg p-4">
         <p class="text-[10px] text-pit-text-muted uppercase tracking-widest mb-1">Session</p>
-        <p class="text-2xl font-bold data-mono text-pit-text">{session.session_type}</p>
+        <p class="text-2xl font-bold data-mono text-pit-text">{viewSession?.session_type ?? session.session_type}</p>
       </div>
     </div>
 
-    {#if dataReady}
+    {#if dataReady && !yearLoading}
       <!-- Driver legend (shared toggle for all charts) -->
-      {#if drivers.length > 0}
+      {#if viewDrivers.length > 0}
         <div class="mb-4">
-          <DriverLegend {drivers} {laps} />
+          <DriverLegend drivers={viewDrivers} laps={viewLaps} />
+        </div>
+      {/if}
+
+      <!-- Comparison mode toggle -->
+      {#if canCompare}
+        <div class="mb-4 flex items-center gap-3">
+          <button
+            class="flex items-center gap-2 px-3 py-1.5 text-[10px] uppercase tracking-widest font-bold border transition-colors cursor-pointer {showComparison ? 'bg-pit-accent/10 border-pit-accent text-pit-accent' : 'bg-pit-surface border-pit-border text-pit-text-muted hover:text-pit-text-dim'}"
+            onclick={toggleComparison}
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            {showComparison ? 'Hide' : 'Show'} comparison
+          </button>
+          {#if showComparison}
+            <span class="text-[9px] text-pit-text-muted font-mono">
+              Fastest driver overlay: {selectedYear} vs {primaryYear}
+            </span>
+          {/if}
         </div>
       {/if}
 
@@ -264,25 +475,33 @@
       {/if}
 
       <div class="space-y-4">
-        {#if laps.length > 0}
+        {#if viewLaps.length > 0}
           <!-- Lap range selector -->
           <LapRangeSelector {maxLap} />
 
-          <LapTimeChart {laps} {drivers} />
-          <GapChart {laps} {drivers} />
-          <PositionChart {laps} {drivers} />
+          <LapTimeChart laps={viewLaps} drivers={viewDrivers}
+            comparisonLaps={showComparison ? comparisonLaps : []}
+            comparisonDrivers={showComparison ? comparisonDrivers : []}
+            comparisonLabel={showComparison ? String(comparisonYear) : ''} />
+          <GapChart laps={viewLaps} drivers={viewDrivers} />
+          <PositionChart laps={viewLaps} drivers={viewDrivers} />
 
           <!-- Lap time summary table -->
-          <LapTimeSummaryTable {laps} {drivers} />
+          <LapTimeSummaryTable laps={viewLaps} drivers={viewDrivers} />
         {:else}
           <div class="bg-pit-surface border border-pit-border p-8 text-center text-pit-text-muted text-xs uppercase tracking-wider">
             No lap data available for this session
           </div>
         {/if}
 
-        {#if stints.length > 0}
-          <StintChart {stints} {drivers} />
+        {#if viewStints.length > 0}
+          <StintChart stints={viewStints} drivers={viewDrivers} />
         {/if}
+      </div>
+    {:else if dataReady && yearLoading}
+      <div class="flex items-center justify-center py-20 gap-3">
+        <div class="w-7 h-7 spinner-f1"></div>
+        <span class="text-pit-text-muted text-xs uppercase tracking-wider">Loading {selectedYear} data...</span>
       </div>
     {/if}
 
@@ -294,7 +513,7 @@
         <div class="flex-1 h-px bg-pit-border"></div>
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-px bg-pit-border">
-        {#each drivers as driver}
+        {#each viewDrivers as driver}
           {@const color = driver.team_colour ? `#${driver.team_colour}` : '#555'}
           <div class="bg-pit-bg p-3 flex items-center gap-3 relative">
             <div class="absolute left-0 top-0 bottom-0 w-[2px]" style="background-color: {color}"></div>
