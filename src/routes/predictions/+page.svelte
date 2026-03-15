@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getSessions, getDrivers, getPositions, uniqueDrivers } from '$lib/api';
 	import type { Session, Driver } from '$lib/api';
-	import { getTeamColor } from '$lib/colors';
+	import { getTeamColor, getTeamLogo } from '$lib/colors';
 	import {
 		predictPreQuali,
 		predictQualifying,
@@ -14,20 +14,6 @@
 	} from '$lib/predictions';
 
 	type Stage = 'pre-quali' | 'qualifying' | 'race';
-
-	const TEAM_SLUGS: Record<string, string> = {
-		'Mercedes': 'mercedes',
-		'Red Bull Racing': 'red-bull',
-		'Ferrari': 'ferrari',
-		'McLaren': 'mclaren',
-		'Aston Martin': 'aston-martin',
-		'Alpine': 'alpine',
-		'Williams': 'williams',
-		'Haas F1 Team': 'haas',
-		'Racing Bulls': 'racing-bulls',
-		'Kick Sauber': 'kick-sauber',
-		'Cadillac': 'cadillac',
-	};
 
 	const FACTOR_LABELS: Record<string, string> = {
 		'Season Trend': 'Season form',
@@ -49,19 +35,6 @@
 	let autoStage = $state<Stage>('pre-quali');
 	let expandedDriver = $state<number | null>(null);
 	let logoErrors = $state<Set<number>>(new Set());
-
-	function getTeamSlug(teamName: string): string | null {
-		for (const [key, slug] of Object.entries(TEAM_SLUGS)) {
-			if (teamName?.toLowerCase().includes(key.toLowerCase())) return slug;
-		}
-		return null;
-	}
-
-	function getTeamLogoUrl(teamName: string): string | null {
-		const slug = getTeamSlug(teamName);
-		if (!slug) return null;
-		return `https://media.formula1.com/image/upload/f_auto,c_limit,q_75,w_112/content/dam/fom-website/teams/2026/${slug}.png`;
-	}
 
 	function handleLogoError(driverNumber: number) {
 		logoErrors = new Set([...logoErrors, driverNumber]);
@@ -305,8 +278,8 @@
 					<div class="space-y-1">
 						{#each prediction.predictions as pred, i}
 							{@const teamColor = pred.driver ? getTeamColor(pred.driver.team_name, pred.driver.team_colour) : '#888'}
-							{@const logoUrl = pred.driver ? getTeamLogoUrl(pred.driver.team_name) : null}
-							{@const showFallback = !logoUrl || logoErrors.has(pred.driver_number)}
+							{@const logoUrl = pred.driver ? getTeamLogo(pred.driver.team_name) : null}
+							{@const showFallback = logoErrors.has(pred.driver_number)}
 							{@const isQ1Dropout = activeTab === 'qualifying' && pred.predicted_position > 15}
 							{@const isQ2Dropout = activeTab === 'qualifying' && pred.predicted_position > 10 && pred.predicted_position <= 15}
 							{@const isExpanded = expandedDriver === pred.driver_number}
@@ -324,9 +297,7 @@
 											<img
 												src={logoUrl}
 												alt={pred.driver?.team_name ?? ''}
-												width="32"
-												height="32"
-												class="w-8 h-8 object-contain"
+												class="h-8 w-auto"
 												onerror={() => handleLogoError(pred.driver_number)}
 											/>
 										{/if}

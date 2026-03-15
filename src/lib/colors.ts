@@ -22,6 +22,28 @@ export const TYRE_COLORS: Record<string, string> = {
   UNKNOWN: '#555555',
 };
 
+const TEAM_LOGO_MAP: Record<string, string> = {
+  'Mercedes': 'mercedes',
+  'Red Bull Racing': 'redbullracing',
+  'Ferrari': 'ferrari',
+  'McLaren': 'mclaren',
+  'Aston Martin': 'astonmartin',
+  'Alpine': 'alpine',
+  'Williams': 'williams',
+  'Haas F1 Team': 'haasf1team',
+  'RB F1 Team': 'racingbulls',
+  'Racing Bulls': 'racingbulls',
+  'Kick Sauber': 'audi',
+  'Cadillac': 'cadillac',
+};
+
+export function getTeamLogo(teamName: string): string {
+  for (const [key, file] of Object.entries(TEAM_LOGO_MAP)) {
+    if (teamName?.toLowerCase().includes(key.toLowerCase())) return `/logos/${file}.webp`;
+  }
+  return `/logos/${teamName?.toLowerCase().replace(/\s+/g, '')}.webp`;
+}
+
 export function getTeamColor(teamName: string, fallbackHex?: string): string {
   if (fallbackHex && fallbackHex !== '000000') return `#${fallbackHex}`;
   for (const [key, color] of Object.entries(TEAM_COLORS)) {

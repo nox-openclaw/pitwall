@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import type { Driver, Session, Position } from '$lib/api';
   import { getDrivers, getSessions, getPositions, uniqueDrivers } from '$lib/api';
-  import { getTeamColor } from '$lib/colors';
+  import { getTeamColor, getTeamLogo } from '$lib/colors';
 
   const POINTS_MAP: Record<number, number> = {
     1: 25, 2: 18, 3: 15, 4: 12, 5: 10,
@@ -197,14 +197,14 @@
             </div>
           </div>
 
-          <!-- Team row with CSS badge -->
+          <!-- Team row with logo -->
           <div class="flex items-center gap-2 mb-3">
-            <div
-              class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
-              style="background-color: {color}"
-            >
-              <span class="text-[9px] font-bold text-white leading-none">{getTeamAbbrev(driver.team_name)}</span>
-            </div>
+            <img
+              src={getTeamLogo(driver.team_name)}
+              class="h-8 w-auto"
+              alt={driver.team_name}
+              onerror={(e) => { const el = e.currentTarget as HTMLImageElement; const d = document.createElement('div'); d.className = 'w-8 h-8 rounded-full flex items-center justify-center shrink-0'; d.style.backgroundColor = color; d.innerHTML = `<span class="text-[9px] font-bold text-white leading-none">${getTeamAbbrev(driver.team_name)}</span>`; el.replaceWith(d); }}
+            />
             <span class="text-[10px] text-pit-text-muted uppercase tracking-wider truncate">{driver.team_name}</span>
           </div>
 
@@ -231,12 +231,12 @@
 
           <!-- Team header -->
           <div class="flex items-center gap-3 mb-4">
-            <div
-              class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
-              style="background-color: {team.color}"
-            >
-              <span class="text-[9px] font-bold text-white leading-none">{getTeamAbbrev(team.teamName)}</span>
-            </div>
+            <img
+              src={getTeamLogo(team.teamName)}
+              class="h-8 w-auto"
+              alt={team.teamName}
+              onerror={(e) => { const el = e.currentTarget as HTMLImageElement; const d = document.createElement('div'); d.className = 'w-8 h-8 rounded-full flex items-center justify-center shrink-0'; d.style.backgroundColor = team.color; d.innerHTML = `<span class="text-[9px] font-bold text-white leading-none">${getTeamAbbrev(team.teamName)}</span>`; el.replaceWith(d); }}
+            />
             <div class="flex-1 min-w-0">
               <h3 class="heading-f1 text-base text-pit-text leading-none truncate">{team.teamName}</h3>
             </div>
