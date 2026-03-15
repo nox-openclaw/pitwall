@@ -61,7 +61,7 @@
     teamName: string;
     color: string;
     totalPoints: number;
-    drivers: { name: string; acronym: string; points: number }[];
+    drivers: { name: string; acronym: string; points: number; headshot_url: string }[];
   }
 
   let constructorStandings = $derived.by(() => {
@@ -79,7 +79,7 @@
       }
       const team = teamMap.get(driver.team_name)!;
       team.totalPoints += pts;
-      team.drivers.push({ name: driver.full_name, acronym: driver.name_acronym, points: pts });
+      team.drivers.push({ name: driver.full_name, acronym: driver.name_acronym, points: pts, headshot_url: driver.headshot_url ?? '' });
     }
     return [...teamMap.values()].sort((a, b) => b.totalPoints - a.totalPoints);
   });
@@ -254,6 +254,13 @@
             {#each team.drivers as d}
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
+                  {#if d.headshot_url}
+                    <img src={d.headshot_url} alt={d.name} class="w-7 h-7 rounded-full object-cover bg-pit-surface" />
+                  {:else}
+                    <div class="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0" style="background-color: {team.color}">
+                      {d.acronym.slice(0,2)}
+                    </div>
+                  {/if}
                   <span class="heading-f1 text-sm text-pit-text">{d.acronym}</span>
                   <span class="text-[10px] text-pit-text-dim truncate">{d.name}</span>
                 </div>
