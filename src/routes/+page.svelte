@@ -14,9 +14,9 @@
 
   // Country code (3-letter from OpenF1) → ISO 2-letter for flag emoji
   const COUNTRY_ISO: Record<string, string> = {
-    AUS: 'AU', BHR: 'BH', SAU: 'SA', JPN: 'JP', CHN: 'CN', MIA: 'US',
+    AUS: "AU", BRN: "BH", BHR: "BH", KSA: "SA", SAU: "SA", JPN: "JP", CHN: "CN", MIA: "US",
     ITA: 'IT', MON: 'MC', ESP: 'ES', CAN: 'CA', AUT: 'AT', GBR: 'GB',
-    BEL: 'BE', HUN: 'HU', NLD: 'NL', SGP: 'SG', AZE: 'AZ', USA: 'US',
+    BEL: "BE", HUN: "HU", NLD: "NL", NED: "NL", SGP: "SG", QAT: "QA", UAE: "AE", AZE: 'AZ', USA: 'US',
     MEX: 'MX', BRA: 'BR', LVS: 'US', ABU: 'AE',
   };
 
