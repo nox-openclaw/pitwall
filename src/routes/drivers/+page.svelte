@@ -23,11 +23,13 @@
     'Cadillac': 'CAD',
   };
 
+  type Tab = 'drivers' | 'constructors';
   type SortMode = 'championship' | 'team' | 'name';
 
   let drivers = $state<Driver[]>([]);
   let driverPoints = $state<Map<number, number>>(new Map());
   let loading = $state(true);
+  let activeTab = $state<Tab>('drivers');
   let sortMode = $state<SortMode>('championship');
 
   function getTeamAbbrev(teamName: string): string {
@@ -55,6 +57,33 @@
     }
   });
 
+  interface ConstructorStanding {
+    teamName: string;
+    color: string;
+    totalPoints: number;
+    drivers: { name: string; acronym: string; points: number }[];
+  }
+
+  let constructorStandings = $derived.by(() => {
+    const teamMap = new Map<string, ConstructorStanding>();
+    for (const driver of drivers) {
+      const color = getTeamColor(driver.team_name, driver.team_colour);
+      const pts = driverPoints.get(driver.driver_number) ?? 0;
+      if (!teamMap.has(driver.team_name)) {
+        teamMap.set(driver.team_name, {
+          teamName: driver.team_name,
+          color,
+          totalPoints: 0,
+          drivers: [],
+        });
+      }
+      const team = teamMap.get(driver.team_name)!;
+      team.totalPoints += pts;
+      team.drivers.push({ name: driver.full_name, acronym: driver.name_acronym, points: pts });
+    }
+    return [...teamMap.values()].sort((a, b) => b.totalPoints - a.totalPoints);
+  });
+
   onMount(async () => {
     try {
       const sessions = await getSessions({ year: 2026, session_type: 'Race' });
@@ -64,17 +93,14 @@
       const latest = sorted[0] ?? sessions.sort((a, b) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime())[0];
       if (!latest) return;
 
-      // Fetch drivers from latest session
       const raw = await getDrivers(latest.session_key);
       drivers = uniqueDrivers(raw);
 
-      // Fetch positions from all past race sessions to calculate championship points
       const points = new Map<number, number>();
       const positionPromises = pastRaces.map(s => getPositions(s.session_key));
       const allPositions = await Promise.all(positionPromises);
 
       for (const racePositions of allPositions) {
-        // Get final position per driver (last position entry = final)
         const finalPositions = new Map<number, number>();
         for (const p of racePositions) {
           finalPositions.set(p.driver_number, p.position);
@@ -98,16 +124,17 @@
     <div class="w-1 h-5 bg-pit-accent"></div>
     <h1 class="heading-f1 text-xl text-pit-text">2026 Championship Standings</h1>
     <div class="flex-1 h-px bg-pit-border"></div>
-    <span class="text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">{drivers.length} Drivers</span>
+    <span class="text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">
+      {activeTab === 'drivers' ? `${drivers.length} Drivers` : `${constructorStandings.length} Teams`}
+    </span>
   </div>
 
-  <!-- Sort toggle -->
-  <div class="flex items-center gap-1 mb-6">
-    <span class="text-[10px] uppercase tracking-widest text-pit-text-dim mr-2">Sort</span>
-    {#each [['championship', 'Championship'], ['team', 'Team'], ['name', 'Name']] as [mode, label]}
+  <!-- Tab toggle -->
+  <div class="flex items-center gap-0 mb-6 border-b border-pit-border">
+    {#each [['drivers', 'Drivers'], ['constructors', 'Constructors']] as [tab, label]}
       <button
-        class="px-3 py-1 text-[10px] uppercase tracking-wider font-medium transition-all duration-150 border {sortMode === mode ? 'bg-pit-accent text-white border-pit-accent' : 'bg-transparent text-pit-text-muted border-pit-border hover:border-pit-text-muted'}"
-        onclick={() => sortMode = mode as SortMode}
+        class="px-5 py-2.5 text-[11px] uppercase tracking-widest font-bold transition-all duration-150 border-b-2 -mb-px {activeTab === tab ? 'text-pit-accent border-pit-accent' : 'text-pit-text-muted border-transparent hover:text-pit-text-dim'}"
+        onclick={() => activeTab = tab as Tab}
       >
         {label}
       </button>
@@ -118,7 +145,20 @@
     <div class="flex items-center justify-center py-20">
       <div class="w-7 h-7 spinner-f1"></div>
     </div>
-  {:else}
+  {:else if activeTab === 'drivers'}
+    <!-- Sort toggle -->
+    <div class="flex items-center gap-1 mb-6">
+      <span class="text-[10px] uppercase tracking-widest text-pit-text-dim mr-2">Sort</span>
+      {#each [['championship', 'Championship'], ['team', 'Team'], ['name', 'Name']] as [mode, label]}
+        <button
+          class="px-3 py-1 text-[10px] uppercase tracking-wider font-medium transition-all duration-150 border {sortMode === mode ? 'bg-pit-accent text-white border-pit-accent' : 'bg-transparent text-pit-text-muted border-pit-border hover:border-pit-text-muted'}"
+          onclick={() => sortMode = mode as SortMode}
+        >
+          {label}
+        </button>
+      {/each}
+    </div>
+
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-pit-border">
       {#each sortedDrivers as driver, i}
         {@const color = getTeamColor(driver.team_name, driver.team_colour)}
@@ -157,7 +197,7 @@
             </div>
           </div>
 
-          <!-- Team row with badge -->
+          <!-- Team row with CSS badge -->
           <div class="flex items-center gap-2 mb-3">
             <div
               class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
@@ -177,6 +217,49 @@
               {/if}
               <span class="text-sm font-bold text-pit-text data-mono" style="color: {pts > 0 ? color : ''}">{pts}</span>
             </div>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <!-- Constructors standings -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-pit-border">
+      {#each constructorStandings as team, i}
+        <div class="bg-pit-bg p-5 hover:bg-pit-surface transition-all duration-150 relative flex flex-col h-full">
+          <!-- Team color accent -->
+          <div class="absolute left-0 top-0 bottom-0 w-[2px]" style="background-color: {team.color}"></div>
+
+          <!-- Team header -->
+          <div class="flex items-center gap-3 mb-4">
+            <div
+              class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+              style="background-color: {team.color}"
+            >
+              <span class="text-[9px] font-bold text-white leading-none">{getTeamAbbrev(team.teamName)}</span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <h3 class="heading-f1 text-base text-pit-text leading-none truncate">{team.teamName}</h3>
+            </div>
+            <span class="text-[10px] text-pit-text-muted data-mono">C{i + 1}</span>
+          </div>
+
+          <!-- Total points -->
+          <div class="flex items-center justify-between mb-4">
+            <span class="text-[10px] text-pit-text-dim uppercase tracking-wider">Total Points</span>
+            <span class="text-lg font-bold data-mono" style="color: {team.totalPoints > 0 ? team.color : ''}">{team.totalPoints}</span>
+          </div>
+
+          <!-- Drivers -->
+          <div class="border-t border-pit-border pt-3 flex flex-col gap-2">
+            {#each team.drivers as d}
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="heading-f1 text-sm text-pit-text">{d.acronym}</span>
+                  <span class="text-[10px] text-pit-text-dim truncate">{d.name}</span>
+                </div>
+                <span class="text-xs font-bold text-pit-text-dim data-mono">{d.points}</span>
+              </div>
+            {/each}
           </div>
         </div>
       {/each}
