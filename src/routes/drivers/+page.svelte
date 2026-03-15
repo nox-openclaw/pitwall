@@ -131,7 +131,7 @@
 
   <!-- Tab toggle -->
   <div class="flex items-center gap-0 mb-6 border-b border-pit-border">
-    {#each [['drivers', 'Drivers'], ['constructors', 'Constructors']] as [tab, label]}
+    {#each [['drivers', 'Drivers Standings'], ['constructors', 'Constructors Standings']] as [tab, label]}
       <button
         class="px-5 py-2.5 text-[11px] uppercase tracking-widest font-bold transition-all duration-150 border-b-2 -mb-px {activeTab === tab ? 'text-pit-accent border-pit-accent' : 'text-pit-text-muted border-transparent hover:text-pit-text-dim'}"
         onclick={() => activeTab = tab as Tab}
