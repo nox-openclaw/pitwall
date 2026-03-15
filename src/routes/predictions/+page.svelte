@@ -177,9 +177,24 @@
 			BETA
 		</span>
 	</div>
-	<p class="text-xs text-pit-text-muted mb-6 ml-4">
+	<p class="text-xs text-pit-text-muted mb-4 ml-4">
 		Predictions based on 2026 season form, qualifying pace, reliability and circuit history.
 	</p>
+	<div class="mb-6 ml-4">
+		<a
+			href="/predictions"
+			class="text-pit-text-muted text-[10px] uppercase tracking-widest data-mono"
+		>
+			Think you can do better?
+		</a>
+		<span class="text-pit-text-muted text-[10px] mx-1">&middot;</span>
+		<a
+			href="/predict/{weekendSessions.find(s => s.session_type === 'Race' || s.session_name === 'Race')?.session_key ?? ''}"
+			class="text-pit-purple text-[10px] uppercase tracking-widest hover:text-pit-purple/80 transition-colors data-mono font-bold"
+		>
+			Beat the Algorithm &rarr;
+		</a>
+	</div>
 
 	{#if loading}
 		<div class="flex items-center justify-center py-20">

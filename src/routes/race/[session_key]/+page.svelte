@@ -413,6 +413,21 @@
       </div>
     {/if}
 
+    <!-- Beat the Algorithm link -->
+    {#if session.session_type === 'Race' || session.session_name === 'Race'}
+      <div class="mb-6">
+        <a
+          href="/predict/{sessionKey}"
+          class="inline-flex items-center gap-2 px-4 py-2 bg-pit-surface border border-pit-purple/30 text-pit-purple text-xs font-bold uppercase tracking-widest hover:border-pit-purple/60 hover:bg-pit-purple/5 transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          Beat the Algorithm
+        </a>
+      </div>
+    {/if}
+
     <!-- Stats bar -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-pit-border mb-8">
       <div class="bg-pit-bg p-4">

@@ -33,7 +33,7 @@
         >Championship</a>
         <a
           href="/predictions"
-          class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/predictions' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
+          class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/predictions' || currentPath.startsWith('/predict/') ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
         >Predictions</a>
       </div>
     </div>
