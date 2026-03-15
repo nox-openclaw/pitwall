@@ -56,7 +56,7 @@
     'Catalunya': 'catalunya',
     'Montmeló': 'catalunya',
     'Montmelo': 'catalunya',
-    'Madrid': 'madrid',
+    'Madrid': 'madring',
     // Canada
     'Montréal': 'montreal',
     'Montreal': 'montreal',
@@ -99,12 +99,7 @@
     // Abu Dhabi
     'Yas Island': 'yas_marina',
     'Yas Marina': 'yas_marina',
-    'Yas Marina Circuit': 'yas_marina',
-    'Spa-Francorchamps': 'spa',
-    'Hungaroring': 'budapest',
-    'Baku': 'baku',
-    'Austin': 'austin',
-    'Madring': 'madring',
+
     'Abu Dhabi': 'yas_marina',
   };
 
