@@ -9,18 +9,18 @@
     6: 8, 7: 6, 8: 4, 9: 2, 10: 1,
   };
 
-  const TEAM_LOGO_SLUGS: Record<string, string> = {
-    'Mercedes': 'mercedes',
-    'Red Bull Racing': 'red-bull',
-    'Ferrari': 'ferrari',
-    'McLaren': 'mclaren',
-    'Aston Martin': 'aston-martin',
-    'Alpine': 'alpine',
-    'Williams': 'williams',
-    'Haas F1 Team': 'haas',
-    'Racing Bulls': 'racing-bulls',
-    'Kick Sauber': 'kick-sauber',
-    'Cadillac': 'cadillac',
+  const TEAM_ABBREVS: Record<string, string> = {
+    'Mercedes': 'MER',
+    'Red Bull Racing': 'RBR',
+    'Ferrari': 'FER',
+    'McLaren': 'MCL',
+    'Aston Martin': 'AMR',
+    'Alpine': 'ALP',
+    'Williams': 'WIL',
+    'Haas F1 Team': 'HAA',
+    'Racing Bulls': 'RBU',
+    'Kick Sauber': 'SAU',
+    'Cadillac': 'CAD',
   };
 
   type SortMode = 'championship' | 'team' | 'name';
@@ -30,13 +30,11 @@
   let loading = $state(true);
   let sortMode = $state<SortMode>('championship');
 
-  function getTeamLogoUrl(teamName: string): string | null {
-    for (const [key, slug] of Object.entries(TEAM_LOGO_SLUGS)) {
-      if (teamName?.toLowerCase().includes(key.toLowerCase())) {
-        return `https://media.formula1.com/image/upload/f_auto,c_limit,q_75,w_112/content/dam/fom-website/teams/2026/${slug}.png`;
-      }
+  function getTeamAbbrev(teamName: string): string {
+    for (const [key, abbrev] of Object.entries(TEAM_ABBREVS)) {
+      if (teamName?.toLowerCase().includes(key.toLowerCase())) return abbrev;
     }
-    return null;
+    return teamName?.slice(0, 3).toUpperCase() ?? '???';
   }
 
   function getInitials(name: string): string {
@@ -125,8 +123,7 @@
       {#each sortedDrivers as driver, i}
         {@const color = getTeamColor(driver.team_name, driver.team_colour)}
         {@const pts = driverPoints.get(driver.driver_number) ?? 0}
-        {@const teamLogo = getTeamLogoUrl(driver.team_name)}
-        <div class="bg-pit-bg p-5 hover:bg-pit-surface transition-all duration-150 group relative">
+        <div class="bg-pit-bg p-5 hover:bg-pit-surface transition-all duration-150 group relative flex flex-col h-full">
           <!-- Team color accent -->
           <div class="absolute left-0 top-0 bottom-0 w-[2px]" style="background-color: {color}"></div>
 
@@ -160,18 +157,19 @@
             </div>
           </div>
 
-          <!-- Team row with logo -->
+          <!-- Team row with badge -->
           <div class="flex items-center gap-2 mb-3">
-            {#if teamLogo}
-              <img src={teamLogo} alt={driver.team_name} class="w-6 h-6 object-contain" />
-            {:else}
-              <div class="w-2 h-2 rounded-sm shrink-0" style="background-color: {color}"></div>
-            {/if}
-            <span class="text-[10px] text-pit-text-muted uppercase tracking-wider">{driver.team_name}</span>
+            <div
+              class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+              style="background-color: {color}"
+            >
+              <span class="text-[9px] font-bold text-white leading-none">{getTeamAbbrev(driver.team_name)}</span>
+            </div>
+            <span class="text-[10px] text-pit-text-muted uppercase tracking-wider truncate">{driver.team_name}</span>
           </div>
 
           <!-- Points -->
-          <div class="flex items-center justify-between border-t border-pit-border pt-2">
+          <div class="flex items-center justify-between border-t border-pit-border pt-2 mt-auto">
             <span class="text-[10px] text-pit-text-dim uppercase tracking-wider">Points</span>
             <div class="flex items-center gap-2">
               {#if sortMode === 'championship'}
