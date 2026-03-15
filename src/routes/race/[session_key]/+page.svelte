@@ -148,7 +148,7 @@
       <div class="relative w-full h-[300px] mb-8 overflow-hidden border border-pit-border bg-[#1a1a2e]">
         <img
           src={heroImg}
-          alt="{session.circuit_short_name} circuit layout"
+          alt=""
           class="absolute inset-0 w-full h-full object-contain p-8 opacity-70"
         />
         <div class="absolute inset-0 bg-gradient-to-t from-pit-bg via-pit-bg/40 to-transparent"></div>
