@@ -29,8 +29,44 @@
   let drivers = $state<Driver[]>([]);
   let driverPoints = $state<Map<number, number>>(new Map());
   let loading = $state(true);
+  let revalidating = $state(false);
   let activeTab = $state<Tab>('drivers');
   let sortMode = $state<SortMode>('championship');
+
+  // --- SWR Cache helpers ---
+  const DRIVERS_CACHE_KEY = 'pitwall_drivers_2026';
+  const DRIVERS_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+
+  interface CacheEntry<T> {
+    data: T;
+    timestamp: number;
+  }
+
+  function cacheGet<T>(key: string, ttl: number): T | null {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const entry: CacheEntry<T> = JSON.parse(raw);
+      if (Date.now() - entry.timestamp > ttl) return null;
+      return entry.data;
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheSet<T>(key: string, data: T): void {
+    try {
+      const entry: CacheEntry<T> = { data, timestamp: Date.now() };
+      localStorage.setItem(key, JSON.stringify(entry));
+    } catch {
+      // localStorage full or unavailable
+    }
+  }
+
+  interface ChampionshipCache {
+    drivers: Driver[];
+    points: [number, number][];
+  }
 
   function getTeamAbbrev(teamName: string): string {
     for (const [key, abbrev] of Object.entries(TEAM_ABBREVS)) {
@@ -84,37 +120,72 @@
     return [...teamMap.values()].sort((a, b) => b.totalPoints - a.totalPoints);
   });
 
-  onMount(async () => {
-    try {
-      const sessions = await getSessions({ year: 2026, session_type: 'Race' });
-      const now = new Date();
-      const pastRaces = sessions.filter(s => new Date(s.date_start) <= now);
-      const sorted = pastRaces.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
-      const latest = sorted[0] ?? sessions.sort((a, b) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime())[0];
-      if (!latest) return;
+  async function fetchChampionshipData(): Promise<ChampionshipCache | null> {
+    const sessions = await getSessions({ year: 2026, session_type: 'Race' });
+    const now = new Date();
+    const pastRaces = sessions.filter(s => new Date(s.date_start) <= now);
+    const sorted = pastRaces.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+    const latest = sorted[0] ?? sessions.sort((a, b) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime())[0];
+    if (!latest) return null;
 
-      const raw = await getDrivers(latest.session_key);
-      drivers = uniqueDrivers(raw);
+    const raw = await getDrivers(latest.session_key);
+    const drvs = uniqueDrivers(raw);
 
-      const points = new Map<number, number>();
-      const positionPromises = pastRaces.map(s => getPositions(s.session_key));
-      const allPositions = await Promise.all(positionPromises);
+    const points = new Map<number, number>();
+    const positionPromises = pastRaces.map(s => getPositions(s.session_key));
+    const allPositions = await Promise.all(positionPromises);
 
-      for (const racePositions of allPositions) {
-        const finalPositions = new Map<number, number>();
-        for (const p of racePositions) {
-          finalPositions.set(p.driver_number, p.position);
-        }
-        for (const [driverNum, pos] of finalPositions) {
-          const pts = POINTS_MAP[pos] ?? 0;
-          points.set(driverNum, (points.get(driverNum) ?? 0) + pts);
-        }
+    for (const racePositions of allPositions) {
+      const finalPositions = new Map<number, number>();
+      for (const p of racePositions) {
+        finalPositions.set(p.driver_number, p.position);
       }
-      driverPoints = points;
-    } catch (e) {
-      console.error(e);
-    } finally {
+      for (const [driverNum, pos] of finalPositions) {
+        const pts = POINTS_MAP[pos] ?? 0;
+        points.set(driverNum, (points.get(driverNum) ?? 0) + pts);
+      }
+    }
+
+    return { drivers: drvs, points: [...points.entries()] };
+  }
+
+  function applyCachedData(cached: ChampionshipCache) {
+    drivers = cached.drivers;
+    driverPoints = new Map(cached.points);
+  }
+
+  onMount(async () => {
+    // SWR: try cached data first
+    const cached = cacheGet<ChampionshipCache>(DRIVERS_CACHE_KEY, DRIVERS_CACHE_TTL);
+    if (cached) {
+      applyCachedData(cached);
       loading = false;
+
+      // Background revalidate
+      revalidating = true;
+      try {
+        const fresh = await fetchChampionshipData();
+        if (fresh) {
+          cacheSet(DRIVERS_CACHE_KEY, fresh);
+          applyCachedData(fresh);
+        }
+      } catch (e) {
+        console.error('Background revalidation failed:', e);
+      } finally {
+        revalidating = false;
+      }
+    } else {
+      try {
+        const data = await fetchChampionshipData();
+        if (data) {
+          cacheSet(DRIVERS_CACHE_KEY, data);
+          applyCachedData(data);
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loading = false;
+      }
     }
   });
 </script>
@@ -124,6 +195,9 @@
     <div class="w-1 h-5 bg-pit-accent"></div>
     <h1 class="heading-f1 text-xl text-pit-text">2026 Championship Standings</h1>
     <div class="flex-1 h-px bg-pit-border"></div>
+    {#if revalidating}
+      <span class="w-2 h-2 rounded-full bg-pit-accent animate-spin-slow opacity-70" title="Refreshing data"></span>
+    {/if}
     <span class="text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">
       {activeTab === 'drivers' ? `${drivers.length} Drivers` : `${constructorStandings.length} Teams`}
     </span>
@@ -142,8 +216,29 @@
   </div>
 
   {#if loading}
-    <div class="flex items-center justify-center py-20">
-      <div class="w-7 h-7 spinner-f1"></div>
+    <!-- Skeleton loading -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-pit-border">
+      {#each Array(12) as _}
+        <div class="bg-pit-bg p-5 relative flex flex-col h-full">
+          <div class="absolute left-0 top-0 bottom-0 w-[2px] bg-pit-surface animate-pulse"></div>
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-full bg-pit-surface animate-pulse"></div>
+            <div class="flex-1 min-w-0">
+              <div class="h-5 w-12 bg-pit-surface animate-pulse rounded-sm mb-1"></div>
+              <div class="h-3 w-24 bg-pit-surface animate-pulse rounded-sm"></div>
+            </div>
+            <div class="w-10 h-10 bg-pit-surface animate-pulse"></div>
+          </div>
+          <div class="flex items-center gap-2 mb-3">
+            <div class="h-8 w-16 bg-pit-surface animate-pulse rounded-sm"></div>
+            <div class="h-3 w-20 bg-pit-surface animate-pulse rounded-sm"></div>
+          </div>
+          <div class="flex items-center justify-between border-t border-pit-border pt-2 mt-auto">
+            <div class="h-3 w-10 bg-pit-surface animate-pulse rounded-sm"></div>
+            <div class="h-4 w-8 bg-pit-surface animate-pulse rounded-sm"></div>
+          </div>
+        </div>
+      {/each}
     </div>
   {:else if activeTab === 'drivers'}
     <!-- Sort toggle -->
@@ -278,3 +373,12 @@
     </div>
   {/if}
 </div>
+
+<style>
+  @keyframes spin-slow {
+    to { transform: rotate(360deg); }
+  }
+  .animate-spin-slow {
+    animation: spin-slow 1.5s linear infinite;
+  }
+</style>

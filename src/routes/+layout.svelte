@@ -29,7 +29,7 @@
         >Races</a>
         <a
           href="/championship"
-          class="px-3 py-1.5 transition-colors duration-150 {currentPath === "/championship"
+          class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/championship' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
         >Championship</a>
         <a
           href="/predictions"
