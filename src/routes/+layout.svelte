@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   let { children } = $props();
 
-  let currentPath = $derived($page.url.pathname);
+  let currentPath = $derived($page.url.pathname as string);
 </script>
 
 <svelte:head>
@@ -31,6 +31,10 @@
           href="/drivers"
           class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/drivers' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
         >Drivers</a>
+        <a
+          href="/predictions"
+          class="px-3 py-1.5 transition-colors duration-150 {currentPath === '/predictions' ? 'text-pit-accent border-b-2 border-pit-accent' : 'text-pit-text-dim hover:text-pit-text'}"
+        >Predictions</a>
       </div>
     </div>
   </nav>
