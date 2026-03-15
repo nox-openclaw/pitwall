@@ -231,12 +231,17 @@
 
           <!-- Team header -->
           <div class="flex items-center gap-3 mb-4">
-            <img
-              src={getTeamLogo(team.teamName)}
-              class="h-8 w-auto"
-              alt={team.teamName}
-              onerror={(e) => { const el = e.currentTarget as HTMLImageElement; const d = document.createElement('div'); d.className = 'w-8 h-8 rounded-full flex items-center justify-center shrink-0'; d.style.backgroundColor = team.color; d.innerHTML = `<span class="text-[9px] font-bold text-white leading-none">${getTeamAbbrev(team.teamName)}</span>`; el.replaceWith(d); }}
-            />
+            <div
+              class="w-10 h-10 rounded-full flex items-center justify-center shrink-0 border-2"
+              style="background-color: {team.color}33; border-color: {team.color}99"
+            >
+              <img
+                src={getTeamLogo(team.teamName)}
+                class="w-6 h-6 object-contain"
+                alt={team.teamName}
+                onerror={(e) => { const el = e.currentTarget as HTMLImageElement; const d = document.createElement('span'); d.className = 'text-[9px] font-bold text-white leading-none'; d.textContent = getTeamAbbrev(team.teamName); el.replaceWith(d); }}
+              />
+            </div>
             <div class="flex-1 min-w-0">
               <h3 class="heading-f1 text-base text-pit-text leading-none truncate">{team.teamName}</h3>
             </div>
