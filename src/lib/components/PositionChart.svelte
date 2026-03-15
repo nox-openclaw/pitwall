@@ -25,12 +25,6 @@
     return d?.name_acronym ?? String(num);
   }
 
-  function formatLapTime(val: number): string {
-    const mins = Math.floor(val / 60);
-    const secs = (val % 60).toFixed(3);
-    return mins > 0 ? `${mins}:${secs.padStart(6, '0')}` : `${secs}s`;
-  }
-
   $effect(() => {
     const _laps = laps;
     const _drivers = drivers;
@@ -46,11 +40,47 @@
   });
 
   function draw() {
-    const valid = laps.filter(l => l.lap_duration && l.lap_duration > 0 && !l.is_pit_out_lap);
+    const valid = laps.filter(l => l.lap_duration && l.lap_duration > 0);
     if (!valid.length) return;
 
     const allDriverNums = [...new Set(valid.map(l => l.driver_number))];
     const grouped = d3.group(valid, d => d.driver_number);
+    const maxLap = d3.max(valid, d => d.lap_number)!;
+    const numDrivers = allDriverNums.length;
+
+    // Compute cumulative times for position calculation
+    const cumTimes = new Map<number, Map<number, number>>();
+    for (const num of allDriverNums) {
+      const data = grouped.get(num)!.sort((a, b) => a.lap_number - b.lap_number);
+      const cum = new Map<number, number>();
+      let total = 0;
+      for (const lap of data) {
+        total += lap.lap_duration!;
+        cum.set(lap.lap_number, total);
+      }
+      cumTimes.set(num, cum);
+    }
+
+    // Compute positions at each lap
+    type PosPoint = { lap: number; position: number; driver: number };
+    const posData = new Map<number, PosPoint[]>();
+    for (const num of allDriverNums) {
+      posData.set(num, []);
+    }
+
+    for (let lap = 1; lap <= maxLap; lap++) {
+      const times: { num: number; time: number }[] = [];
+      for (const num of allDriverNums) {
+        const t = cumTimes.get(num)?.get(lap);
+        if (t !== undefined) {
+          times.push({ num, time: t });
+        }
+      }
+      times.sort((a, b) => a.time - b.time);
+      for (let i = 0; i < times.length; i++) {
+        posData.get(times[i].num)!.push({ lap, position: i + 1, driver: times[i].num });
+      }
+    }
 
     const margin = { top: 20, right: 100, bottom: 40, left: 60 };
     const width = container.clientWidth;
@@ -61,19 +91,13 @@
       .attr('width', width)
       .attr('height', height);
 
-    const maxLap = d3.max(valid, d => d.lap_number)!;
-    const durations = valid.map(d => d.lap_duration!);
-    const medianLap = d3.median(durations)!;
-    const yMin = Math.max(d3.min(durations)! - 2, medianLap - 8);
-    const yMax = Math.min(d3.max(durations)!, medianLap + 12);
-
     const x = d3.scaleLinear().domain([1, maxLap]).range([margin.left, width - margin.right]);
-    const y = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.bottom, margin.top]);
+    const y = d3.scaleLinear().domain([1, numDrivers]).range([margin.top, height - margin.bottom]);
 
     // Grid lines
     svg.append('g')
       .selectAll('line')
-      .data(y.ticks(6))
+      .data(d3.range(1, numDrivers + 1))
       .join('line')
       .attr('x1', margin.left)
       .attr('x2', width - margin.right)
@@ -91,30 +115,23 @@
 
     svg.append('g')
       .attr('transform', `translate(${margin.left},0)`)
-      .call(d3.axisLeft(y).ticks(6).tickFormat(d => {
-        const val = d as number;
-        const mins = Math.floor(val / 60);
-        const secs = (val % 60).toFixed(1);
-        return mins > 0 ? `${mins}:${secs.padStart(4, '0')}` : `${secs}s`;
-      }).tickSize(0))
+      .call(d3.axisLeft(y).ticks(Math.min(numDrivers, 20)).tickFormat(d => `P${d as number}`).tickSize(0))
       .call(g => g.select('.domain').attr('stroke', '#2A2A2A'))
       .call(g => g.selectAll('text').attr('fill', '#6B6B6B').attr('font-size', '10').attr('font-family', 'JetBrains Mono, monospace'));
 
-    const line = d3.line<Lap>()
-      .defined(d => d.lap_duration != null && d.lap_duration > yMin && d.lap_duration < yMax)
-      .x(d => x(d.lap_number))
-      .y(d => y(d.lap_duration!))
+    const line = d3.line<PosPoint>()
+      .x(d => x(d.lap))
+      .y(d => y(d.position))
       .curve(d3.curveMonotoneX);
 
-    // Find race leader
+    // Find race leader (P1 at final lap)
     let leaderNum = allDriverNums[0];
-    let lowestTotal = Infinity;
     for (const num of allDriverNums) {
-      const data = grouped.get(num)!;
-      const total = d3.sum(data, d => d.lap_duration ?? 0);
-      if (total < lowestTotal && total > 0) {
-        lowestTotal = total;
+      const data = posData.get(num)!;
+      const lastPos = data.at(-1);
+      if (lastPos && lastPos.position === 1) {
         leaderNum = num;
+        break;
       }
     }
 
@@ -122,7 +139,7 @@
     const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
 
     for (const num of visibleNums) {
-      const data = grouped.get(num)!.sort((a, b) => a.lap_number - b.lap_number);
+      const data = posData.get(num)!;
       const color = driverColor(num);
       const isLeader = num === leaderNum;
 
@@ -135,11 +152,11 @@
         .attr('opacity', isLeader ? 1 : 0.6);
 
       // Label at end
-      const last = data[data.length - 1];
-      if (last && last.lap_duration && last.lap_duration > yMin && last.lap_duration < yMax) {
+      const last = data.at(-1);
+      if (last) {
         svg.append('text')
-          .attr('x', x(last.lap_number) + 6)
-          .attr('y', y(last.lap_duration!))
+          .attr('x', x(last.lap) + 6)
+          .attr('y', y(last.position))
           .attr('fill', isLeader ? '#E8002D' : color)
           .attr('font-size', '9')
           .attr('font-weight', isLeader ? '700' : '500')
@@ -169,18 +186,18 @@
         const lapNum = Math.round(x.invert(mx));
         if (lapNum < 1 || lapNum > maxLap) { focus.style('display', 'none'); tooltipVisible = false; return; }
 
-        let closest: { num: number; val: number; yPos: number } | null = null;
+        let closest: { num: number; position: number; yPos: number } | null = null;
         let minDist = Infinity;
 
         for (const num of visibleNums) {
-          const driverData = grouped.get(num)!;
-          const point = driverData.find(d => d.lap_number === lapNum);
-          if (point?.lap_duration && point.lap_duration > yMin && point.lap_duration < yMax) {
-            const yPos = y(point.lap_duration);
+          const data = posData.get(num)!;
+          const point = data.find(d => d.lap === lapNum);
+          if (point) {
+            const yPos = y(point.position);
             const dist = Math.abs(my - yPos);
             if (dist < minDist) {
               minDist = dist;
-              closest = { num, val: point.lap_duration, yPos };
+              closest = { num, position: point.position, yPos };
             }
           }
         }
@@ -198,7 +215,7 @@
           tooltipDriver = driverName(closest.num);
           tooltipLap = lapNum;
           tooltipColor = driverColor(closest.num);
-          tooltipValue = formatLapTime(closest.val);
+          tooltipValue = `P${closest.position}`;
         } else {
           focus.style('display', 'none');
           tooltipVisible = false;
@@ -225,7 +242,7 @@
 <div class="bg-pit-surface border border-pit-border p-4">
   <div class="flex items-center gap-2 mb-3">
     <div class="w-0.5 h-3 bg-pit-accent"></div>
-    <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Lap Times</h3>
+    <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Race Position</h3>
   </div>
   <div class="relative">
     <div

@@ -1,12 +1,19 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import * as d3 from 'd3';
   import type { Lap, Driver } from '$lib/api';
   import { getTeamColor } from '$lib/colors';
+  import { chartState } from '$lib/chartState.svelte';
 
   let { laps, drivers }: { laps: Lap[]; drivers: Driver[] } = $props();
 
   let container: HTMLDivElement;
+  let tooltipX = $state(0);
+  let tooltipY = $state(0);
+  let tooltipVisible = $state(false);
+  let tooltipDriver = $state('');
+  let tooltipLap = $state(0);
+  let tooltipValue = $state('');
+  let tooltipColor = $state('#fff');
 
   function driverColor(num: number): string {
     const d = drivers.find(d => d.driver_number === num);
@@ -18,22 +25,31 @@
     return d?.name_acronym ?? String(num);
   }
 
-  onMount(() => {
+  $effect(() => {
+    const _laps = laps;
+    const _drivers = drivers;
+    void chartState.hiddenDrivers;
+
+    if (!container || !_laps.length) return;
+
+    d3.select(container).selectAll('*').remove();
+    tooltipVisible = false;
     draw();
-    return () => { d3.select(container).select('svg').remove(); };
+
+    return () => { d3.select(container).selectAll('*').remove(); };
   });
 
   function draw() {
     const valid = laps.filter(l => l.lap_duration && l.lap_duration > 0);
     if (!valid.length) return;
 
-    const driverNums = [...new Set(valid.map(l => l.driver_number))];
+    const allDriverNums = [...new Set(valid.map(l => l.driver_number))];
     const grouped = d3.group(valid, d => d.driver_number);
     const maxLap = d3.max(valid, d => d.lap_number)!;
 
-    // Compute cumulative times for each driver
+    // Compute cumulative times
     const cumTimes = new Map<number, Map<number, number>>();
-    for (const num of driverNums) {
+    for (const num of allDriverNums) {
       const data = grouped.get(num)!.sort((a, b) => a.lap_number - b.lap_number);
       const cum = new Map<number, number>();
       let total = 0;
@@ -44,19 +60,19 @@
       cumTimes.set(num, cum);
     }
 
-    // Find leader at each lap
+    // Find leader at each lap and compute gaps
     type GapPoint = { lap: number; gap: number; driver: number };
     const gapData = new Map<number, GapPoint[]>();
-    let leaderNum = driverNums[0];
+    let leaderNum = allDriverNums[0];
 
-    for (const num of driverNums) {
+    for (const num of allDriverNums) {
       gapData.set(num, []);
     }
 
     for (let lap = 1; lap <= maxLap; lap++) {
       let bestTime = Infinity;
-      let bestDriver = driverNums[0];
-      for (const num of driverNums) {
+      let bestDriver = allDriverNums[0];
+      for (const num of allDriverNums) {
         const t = cumTimes.get(num)?.get(lap);
         if (t !== undefined && t < bestTime) {
           bestTime = t;
@@ -64,7 +80,7 @@
         }
       }
       if (lap === maxLap) leaderNum = bestDriver;
-      for (const num of driverNums) {
+      for (const num of allDriverNums) {
         const t = cumTimes.get(num)?.get(lap);
         if (t !== undefined) {
           gapData.get(num)!.push({ lap, gap: t - bestTime, driver: num });
@@ -118,7 +134,10 @@
       .y(d => y(d.gap))
       .curve(d3.curveMonotoneX);
 
-    for (const num of driverNums) {
+    // Filter visible drivers
+    const visibleNums = allDriverNums.filter(n => !chartState.isHidden(n));
+
+    for (const num of visibleNums) {
       const data = gapData.get(num)!;
       const color = driverColor(num);
       const isLeader = num === leaderNum;
@@ -145,6 +164,66 @@
       }
     }
 
+    // Hover focus elements
+    const focus = svg.append('g').style('display', 'none');
+    focus.append('line')
+      .attr('y1', margin.top).attr('y2', height - margin.bottom)
+      .attr('stroke', '#E8002D').attr('stroke-width', 0.5).attr('stroke-dasharray', '3,3');
+    focus.append('circle')
+      .attr('r', 4).attr('fill', '#1E1E1E').attr('stroke', '#E8002D').attr('stroke-width', 1.5);
+
+    // Overlay for mouse tracking
+    svg.append('rect')
+      .attr('x', margin.left).attr('y', margin.top)
+      .attr('width', width - margin.left - margin.right)
+      .attr('height', height - margin.top - margin.bottom)
+      .attr('fill', 'none')
+      .attr('pointer-events', 'all')
+      .on('mousemove', (event: MouseEvent) => {
+        const [mx, my] = d3.pointer(event, svg.node());
+        const lapNum = Math.round(x.invert(mx));
+        if (lapNum < 1 || lapNum > maxLap) { focus.style('display', 'none'); tooltipVisible = false; return; }
+
+        let closest: { num: number; gap: number; yPos: number } | null = null;
+        let minDist = Infinity;
+
+        for (const num of visibleNums) {
+          const data = gapData.get(num)!;
+          const point = data.find(d => d.lap === lapNum);
+          if (point && point.gap <= maxGap) {
+            const yPos = y(point.gap);
+            const dist = Math.abs(my - yPos);
+            if (dist < minDist) {
+              minDist = dist;
+              closest = { num, gap: point.gap, yPos };
+            }
+          }
+        }
+
+        if (closest && minDist < 50) {
+          focus.style('display', null);
+          focus.select('line').attr('x1', x(lapNum)).attr('x2', x(lapNum));
+          focus.select('circle').attr('cx', x(lapNum)).attr('cy', closest.yPos)
+            .attr('stroke', driverColor(closest.num));
+
+          const cw = container.clientWidth;
+          tooltipX = x(lapNum) > cw * 0.65 ? x(lapNum) - 140 : x(lapNum) + 14;
+          tooltipY = closest.yPos - 10;
+          tooltipVisible = true;
+          tooltipDriver = driverName(closest.num);
+          tooltipLap = lapNum;
+          tooltipColor = driverColor(closest.num);
+          tooltipValue = `+${closest.gap.toFixed(1)}s`;
+        } else {
+          focus.style('display', 'none');
+          tooltipVisible = false;
+        }
+      })
+      .on('mouseleave', () => {
+        focus.style('display', 'none');
+        tooltipVisible = false;
+      });
+
     svg.append('text')
       .attr('x', width / 2)
       .attr('y', height - 4)
@@ -161,5 +240,18 @@
     <div class="w-0.5 h-3 bg-pit-accent"></div>
     <h3 class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Gap to Leader</h3>
   </div>
-  <div bind:this={container} class="w-full overflow-x-auto"></div>
+  <div class="relative">
+    <div
+      class="absolute pointer-events-none z-10 px-3 py-2 text-[10px] font-mono transition-opacity duration-150 border rounded-sm"
+      style="left: {tooltipX}px; top: {tooltipY}px; opacity: {tooltipVisible ? 1 : 0}; background: #1E1E1E; border-color: #E8002D; color: white; white-space: nowrap;"
+    >
+      <div class="flex items-center gap-1.5 mb-0.5">
+        <div class="w-2 h-2 rounded-full" style="background: {tooltipColor}"></div>
+        <span class="font-bold text-[11px]">{tooltipDriver}</span>
+      </div>
+      <div class="text-[#6B6B6B]">Lap {tooltipLap}</div>
+      <div class="text-white font-semibold">{tooltipValue}</div>
+    </div>
+    <div bind:this={container} class="w-full overflow-x-auto"></div>
+  </div>
 </div>

@@ -3,9 +3,12 @@
   import { page } from '$app/stores';
   import type { Session, Driver, Lap, Stint } from '$lib/api';
   import { getSessions, getDrivers, getLaps, getStints, uniqueDrivers } from '$lib/api';
+  import { chartState } from '$lib/chartState.svelte';
   import LapTimeChart from '$lib/components/LapTimeChart.svelte';
   import GapChart from '$lib/components/GapChart.svelte';
   import StintChart from '$lib/components/StintChart.svelte';
+  import PositionChart from '$lib/components/PositionChart.svelte';
+  import DriverLegend from '$lib/components/DriverLegend.svelte';
 
   let sessionKey = $derived(Number($page.params.session_key));
 
@@ -17,7 +20,18 @@
   let error = $state('');
   let dataReady = $state(false);
 
+  let isLive = $derived(() => {
+    if (!session?.date_start) return false;
+    const start = new Date(session.date_start).getTime();
+    const now = Date.now();
+    const fourHours = 4 * 60 * 60 * 1000;
+    return start <= now && (now - start) <= fourHours;
+  });
+
   onMount(async () => {
+    // Reset hidden drivers when navigating to a new session
+    chartState.reset();
+
     try {
       const [sessionsData, driversData, lapsData, stintsData] = await Promise.all([
         getSessions({ session_key: sessionKey }),
@@ -37,6 +51,26 @@
     } finally {
       loading = false;
     }
+  });
+
+  // Live polling: auto-refresh data every 10 seconds when session is active
+  $effect(() => {
+    if (!isLive() || !session) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const [lapsData, stintsData] = await Promise.all([
+          getLaps(sessionKey),
+          getStints(sessionKey),
+        ]);
+        laps = lapsData;
+        stints = stintsData;
+      } catch (e) {
+        console.error('Live polling error:', e);
+      }
+    }, 10_000);
+
+    return () => clearInterval(interval);
   });
 
   function formatDate(dateStr: string): string {
@@ -70,6 +104,19 @@
       <div class="flex items-center gap-3 mb-2">
         <div class="w-1 h-6 bg-pit-accent"></div>
         <span class="text-[10px] uppercase tracking-widest text-pit-accent font-semibold data-mono">{session.session_type}</span>
+        <div class="flex-1"></div>
+        <!-- Live/Final badge -->
+        {#if isLive()}
+          <div class="flex items-center gap-1.5">
+            <div class="w-2 h-2 rounded-full bg-pit-accent pulse-live"></div>
+            <span class="text-[10px] text-pit-accent font-bold uppercase tracking-wider data-mono">LIVE</span>
+          </div>
+        {:else}
+          <div class="flex items-center gap-1.5">
+            <div class="w-1.5 h-1.5 rounded-full bg-pit-text-muted"></div>
+            <span class="text-[10px] text-pit-text-muted font-semibold uppercase tracking-wider data-mono">FINAL</span>
+          </div>
+        {/if}
       </div>
       <h1 class="heading-f1 text-3xl sm:text-4xl text-pit-text mb-1">
         {session.country_name} Grand Prix
@@ -100,10 +147,18 @@
     </div>
 
     {#if dataReady}
+      <!-- Driver legend (shared toggle for all charts) -->
+      {#if drivers.length > 0}
+        <div class="mb-4">
+          <DriverLegend {drivers} />
+        </div>
+      {/if}
+
       <div class="space-y-4">
         {#if laps.length > 0}
           <LapTimeChart {laps} {drivers} />
           <GapChart {laps} {drivers} />
+          <PositionChart {laps} {drivers} />
         {:else}
           <div class="bg-pit-surface border border-pit-border p-8 text-center text-pit-text-muted text-xs uppercase tracking-wider">
             No lap data available for this session
