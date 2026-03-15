@@ -82,6 +82,7 @@
     'Marina Bay': 'singapore',
     // USA - Austin
     'Austin': 'austin',
+    'Madring': 'madring',
     'COTA': 'austin',
     // Mexico
     'Mexico City': 'mexico_city',
@@ -103,6 +104,7 @@
     'Hungaroring': 'budapest',
     'Baku': 'baku',
     'Austin': 'austin',
+    'Madring': 'madring',
     'Abu Dhabi': 'yas_marina',
   };
 
