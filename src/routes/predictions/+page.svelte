@@ -247,11 +247,28 @@
 		</div>
 
 		{#if predicting}
-			<div class="flex items-center gap-3 py-16 justify-center">
-				<div class="spinner-f1 w-6 h-6"></div>
-				<span class="text-pit-text-dim text-xs uppercase tracking-widest data-mono">
-					Crunching data...
-				</span>
+			<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+				<div class="lg:col-span-2">
+					<div class="flex items-center gap-2 mb-4">
+						<div class="w-0.5 h-5 bg-pit-accent"></div>
+						<div class="h-4 w-32 bg-pit-surface rounded animate-pulse"></div>
+					</div>
+					<div class="space-y-1">
+						{#each Array(20) as _, i}
+							<div class="flex items-center gap-3 bg-pit-surface border border-pit-border px-3 py-2">
+								<div class="w-8 h-8 rounded-full bg-pit-border animate-pulse shrink-0"></div>
+								<div class="w-10 shrink-0">
+									<div class="h-5 w-7 bg-pit-border rounded animate-pulse ml-auto"></div>
+								</div>
+								<div class="flex-1 min-w-0 flex items-center gap-2">
+									<div class="h-4 w-12 bg-pit-border rounded animate-pulse"></div>
+									<div class="h-3 w-24 bg-pit-border/60 rounded animate-pulse"></div>
+								</div>
+								<div class="h-4 w-6 bg-pit-border rounded animate-pulse shrink-0"></div>
+							</div>
+						{/each}
+					</div>
+				</div>
 			</div>
 		{:else if prediction}
 			<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
