@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Driver } from '$lib/api';
-  import { getDrivers, uniqueDrivers } from '$lib/api';
+  import { getDrivers, getSessions, uniqueDrivers } from '$lib/api';
   import { getTeamColor } from '$lib/colors';
 
   // Use a known recent session for driver data
-  const SESSION_KEY = 9574;
+  
 
   let drivers = $state<Driver[]>([]);
   let loading = $state(true);
 
   onMount(async () => {
     try {
-      const raw = await getDrivers(SESSION_KEY);
+      const sessions = await getSessions({ year: 2026, session_type: "Race" });
+      const sorted = sessions.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+      const latest = sorted.find(s => new Date(s.date_start) <= new Date()) ?? sorted[0];
+      if (!latest) return;
+      const raw = await getDrivers(latest.session_key);
       drivers = uniqueDrivers(raw).sort((a, b) => a.team_name.localeCompare(b.team_name));
     } catch (e) {
       console.error(e);
