@@ -309,12 +309,33 @@
               </div>
             {/if}
           </div>
-          <h1 class="heading-f1 text-3xl sm:text-4xl text-pit-text mb-1">
-            {session.country_name} Grand Prix
-          </h1>
-          <p class="text-xs text-pit-text-muted font-mono tracking-wide">
-            {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
-          </p>
+          <div class="flex items-end justify-between gap-4">
+            <div>
+              <h1 class="heading-f1 text-3xl sm:text-4xl text-pit-text mb-1">
+                {session.country_name} Grand Prix
+              </h1>
+              <p class="text-xs text-pit-text-muted font-mono tracking-wide">
+                {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
+              </p>
+            </div>
+            {#if availableYears.length > 1}
+              <div class="flex items-center gap-2 shrink-0">
+                {#if yearLoading}
+                  <div class="w-4 h-4 spinner-f1"></div>
+                {/if}
+                <select
+                  class="year-dropdown"
+                  value={selectedYear}
+                  onchange={(e) => selectYear(Number(e.currentTarget.value))}
+                  disabled={yearLoading}
+                >
+                  {#each availableYears as year}
+                    <option value={year}>{year}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
+          </div>
         </div>
       </div>
     {:else}
@@ -336,37 +357,33 @@
             </div>
           {/if}
         </div>
-        <h1 class="heading-f1 text-3xl sm:text-4xl text-pit-text mb-1">
-          {session.country_name} Grand Prix
-        </h1>
-        <p class="text-xs text-pit-text-muted font-mono tracking-wide">
-          {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
-        </p>
-      </div>
-    {/if}
-
-    <!-- Year selector tabs -->
-    {#if availableYears.length > 1}
-      <div class="flex items-center gap-0 mb-6 border-b border-pit-border">
-        <div class="flex items-center gap-2 mr-4">
-          <div class="w-0.5 h-3 bg-pit-accent"></div>
-          <span class="text-[10px] heading-f1 text-pit-text-dim tracking-widest">Season</span>
-        </div>
-        {#each availableYears as year}
-          <button
-            class="px-5 py-2.5 text-[11px] uppercase tracking-widest font-bold border-b-2 -mb-px transition-colors cursor-pointer {selectedYear === year ? 'text-pit-accent border-pit-accent' : 'text-pit-text-muted border-transparent hover:text-pit-text-dim'}"
-            onclick={() => selectYear(year)}
-            disabled={yearLoading}
-          >
-            {year}
-          </button>
-        {/each}
-        {#if yearLoading}
-          <div class="ml-3 flex items-center gap-2">
-            <div class="w-4 h-4 spinner-f1"></div>
-            <span class="text-[9px] text-pit-text-muted uppercase tracking-wider">Loading...</span>
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <h1 class="heading-f1 text-3xl sm:text-4xl text-pit-text mb-1">
+              {session.country_name} Grand Prix
+            </h1>
+            <p class="text-xs text-pit-text-muted font-mono tracking-wide">
+              {viewSession?.circuit_short_name ?? session.circuit_short_name} &middot; {formatDate(viewSession?.date_start ?? session.date_start)}
+            </p>
           </div>
-        {/if}
+          {#if availableYears.length > 1}
+            <div class="flex items-center gap-2 shrink-0">
+              {#if yearLoading}
+                <div class="w-4 h-4 spinner-f1"></div>
+              {/if}
+              <select
+                class="year-dropdown"
+                value={selectedYear}
+                onchange={(e) => selectYear(Number(e.currentTarget.value))}
+                disabled={yearLoading}
+              >
+                {#each availableYears as year}
+                  <option value={year}>{year}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+        </div>
       </div>
     {/if}
 
@@ -533,3 +550,42 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .year-dropdown {
+    appearance: none;
+    background-color: #1E1E1E;
+    color: #fff;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 6px 32px 6px 12px;
+    border: 1px solid #333;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.15s;
+  }
+
+  .year-dropdown:focus {
+    outline: none;
+    border-color: #e10600;
+  }
+
+  .year-dropdown:hover:not(:disabled) {
+    border-color: #555;
+  }
+
+  .year-dropdown:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .year-dropdown option {
+    background-color: #1E1E1E;
+    color: #fff;
+  }
+</style>
