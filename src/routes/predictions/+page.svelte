@@ -25,8 +25,8 @@
 	let prediction = $state<StagePrediction | null>(null);
 	let predicting = $state(false);
 	let autoStage = $state<Stage>('pre-quali');
+	let expandedDriver = $state<number | null>(null);
 
-	// Load available circuits from 2026 season
 	async function loadCircuits() {
 		try {
 			const sessions = await getSessions({ year: 2026 });
@@ -44,7 +44,6 @@
 			}
 			availableCircuits = circuits;
 
-			// Auto-select the next upcoming race
 			const now = new Date();
 			const upcoming = sessions
 				.filter((s) => s.session_type === 'Race' || s.session_name === 'Race')
@@ -62,7 +61,6 @@
 		}
 	}
 
-	// Load weekend sessions and drivers when circuit changes
 	async function loadWeekend(circuit: string) {
 		if (!circuit) return;
 		predicting = true;
@@ -72,18 +70,15 @@
 			const sessions = await getSessions({ circuit_short_name: circuit, year: 2026 });
 			weekendSessions = sessions;
 
-			// Determine active stage
 			autoStage = getActiveStage(sessions);
 			activeTab = autoStage;
 
-			// Get drivers from the latest session
 			if (sessions.length > 0) {
 				const latestSession = sessions[sessions.length - 1];
 				const rawDrivers = await getDrivers(latestSession.session_key);
 				drivers = uniqueDrivers(rawDrivers);
 			}
 
-			// Run prediction for active stage
 			await runPrediction(autoStage, circuit);
 		} catch (e) {
 			error = 'Failed to load weekend data';
@@ -95,6 +90,7 @@
 		const c = circuit ?? selectedCircuit;
 		if (!c || drivers.length === 0) return;
 		predicting = true;
+		expandedDriver = null;
 
 		try {
 			if (stage === 'pre-quali') {
@@ -103,7 +99,6 @@
 				const fpKeys = getFPSessionKeys(weekendSessions);
 				prediction = await predictQualifying(c, 2026, drivers, fpKeys);
 			} else {
-				// Race: need qualifying results for grid
 				const qualiSession = weekendSessions.find(
 					(s) => s.session_type === 'Qualifying' || s.session_name?.includes('Qualifying')
 				);
@@ -114,7 +109,6 @@
 						gridPositions.set(p.driver_number, p.position);
 					}
 				} else {
-					// Fallback: use driver order
 					drivers.forEach((d, i) => gridPositions.set(d.driver_number, i + 1));
 				}
 				prediction = await predictRace(c, 2026, drivers, gridPositions);
@@ -128,6 +122,10 @@
 	function switchTab(tab: Stage) {
 		activeTab = tab;
 		runPrediction(tab);
+	}
+
+	function toggleExpanded(driverNum: number) {
+		expandedDriver = expandedDriver === driverNum ? null : driverNum;
 	}
 
 	function getConfidenceColor(confidence: number): string {
@@ -146,6 +144,17 @@
 		if (change > 0) return '#00D26A';
 		if (change < 0) return '#E8002D';
 		return '#6B6B6B';
+	}
+
+	function getFactorBarColor(name: string): string {
+		switch (name) {
+			case 'Team Performance': return '#E8002D';
+			case 'Driver Skill': return '#FF8000';
+			case 'Race Pace vs Grid': return '#27F4D2';
+			case 'Reliability': return '#FFD700';
+			case 'Circuit History': return '#3671C6';
+			default: return '#888';
+		}
 	}
 
 	$effect(() => {
@@ -241,11 +250,11 @@
 		<!-- Stage Description -->
 		<div class="mb-6 text-xs text-pit-text-dim">
 			{#if activeTab === 'pre-quali'}
-				Data-driven grid prediction using 2026 team performance (60%), circuit history (25%), and recent driver form (15%).
+				Data-driven grid prediction using 2026 team performance (50%), driver skill delta (15%), race pace vs grid (15%), reliability (10%), and circuit history (10%).
 			{:else if activeTab === 'qualifying'}
-				Qualifying prediction blending 2026 car baselines with practice pace and circuit-specific team performance.
+				Qualifying prediction from 2026 team baselines, teammate head-to-heads, and circuit-specific history.
 			{:else}
-				Race outcome using team performance, grid position adjusted for overtaking difficulty, and race vs quali deltas.
+				Race outcome using team performance, grid position adjusted for overtaking difficulty, race vs quali deltas, and reliability factors.
 			{/if}
 		</div>
 
@@ -270,7 +279,6 @@
 						</h2>
 					</div>
 
-					<!-- Q1/Q2 dropout markers for qualifying stage -->
 					{#if activeTab === 'qualifying' && prediction.q1_dropouts}
 						<div class="mb-4 flex gap-4 text-[10px] uppercase tracking-widest text-pit-text-muted data-mono">
 							<span>Q3: P1-P10</span>
@@ -284,58 +292,97 @@
 							{@const teamColor = pred.driver ? getTeamColor(pred.driver.team_name, pred.driver.team_colour) : '#888'}
 							{@const isQ1Dropout = activeTab === 'qualifying' && pred.predicted_position > 15}
 							{@const isQ2Dropout = activeTab === 'qualifying' && pred.predicted_position > 10 && pred.predicted_position <= 15}
-							<div
-								class="flex items-center gap-3 bg-pit-surface border border-pit-border px-3 py-2 group hover:border-pit-accent/30 transition-colors {isQ1Dropout ? 'opacity-50' : isQ2Dropout ? 'opacity-70' : ''}"
-							>
-								<!-- Position -->
-								<div class="w-8 text-right">
-									<span class="data-mono text-sm font-bold {i < 3 ? 'text-pit-accent' : 'text-pit-text-dim'}">
-										P{pred.predicted_position}
-									</span>
-								</div>
-
-								<!-- Team color bar -->
-								<div class="w-0.5 h-8 rounded-full" style="background-color: {teamColor}"></div>
-
-								<!-- Driver info -->
-								<div class="flex-1 min-w-0">
-									<div class="flex items-center gap-2">
-										<span class="text-sm font-semibold text-pit-text">
-											{pred.driver?.name_acronym ?? `#${pred.driver_number}`}
-										</span>
-										<span class="text-[10px] text-pit-text-muted truncate">
-											{pred.driver?.team_name ?? ''}
+							{@const isExpanded = expandedDriver === pred.driver_number}
+							<div>
+								<button
+									onclick={() => toggleExpanded(pred.driver_number)}
+									class="w-full flex items-center gap-3 bg-pit-surface border border-pit-border px-3 py-2 hover:border-pit-accent/30 transition-colors text-left {isQ1Dropout ? 'opacity-50' : isQ2Dropout ? 'opacity-70' : ''}"
+								>
+									<!-- Position -->
+									<div class="w-8 text-right">
+										<span class="data-mono text-sm font-bold {i < 3 ? 'text-pit-accent' : 'text-pit-text-dim'}">
+											P{pred.predicted_position}
 										</span>
 									</div>
-								</div>
 
-								<!-- Position change (race stage) -->
-								{#if activeTab === 'race' && pred.position_change !== undefined && pred.position_change !== 0}
-									<div class="flex items-center gap-1 data-mono text-xs" style="color: {getChangeColor(pred.position_change)}">
-										<span>{getChangeArrow(pred.position_change)}</span>
-										<span>{Math.abs(pred.position_change)}</span>
+									<!-- Team color bar -->
+									<div class="w-0.5 h-8 rounded-full" style="background-color: {teamColor}"></div>
+
+									<!-- Driver info -->
+									<div class="flex-1 min-w-0">
+										<div class="flex items-center gap-2">
+											<span class="text-sm font-semibold text-pit-text">
+												{pred.driver?.name_acronym ?? `#${pred.driver_number}`}
+											</span>
+											<span class="text-[10px] text-pit-text-muted truncate">
+												{pred.driver?.team_name ?? ''}
+											</span>
+											{#if pred.reliability_warning}
+												<span class="text-[10px] text-pit-yellow" title="DNF rate >{'\u00A0'}20%">&#9888;</span>
+											{/if}
+										</div>
+									</div>
+
+									<!-- Expected race delta -->
+									{#if pred.expected_race_delta !== undefined && pred.expected_race_delta !== 0}
+										<div class="hidden sm:flex items-center gap-1 data-mono text-[10px] text-pit-text-muted" title="Avg positions gained/lost grid to finish">
+											<span style="color: {getChangeColor(pred.expected_race_delta)}">
+												{pred.expected_race_delta >= 0 ? '+' : ''}{pred.expected_race_delta.toFixed(1)}
+											</span>
+											<span>race</span>
+										</div>
+									{/if}
+
+									<!-- Position change (race stage) -->
+									{#if activeTab === 'race' && pred.position_change !== undefined && pred.position_change !== 0}
+										<div class="flex items-center gap-1 data-mono text-xs" style="color: {getChangeColor(pred.position_change)}">
+											<span>{getChangeArrow(pred.position_change)}</span>
+											<span>{Math.abs(pred.position_change)}</span>
+										</div>
+									{/if}
+
+									<!-- Confidence bar -->
+									<div class="w-24 flex items-center gap-2">
+										<div class="flex-1 h-1.5 bg-pit-border rounded-full overflow-hidden">
+											<div
+												class="h-full rounded-full transition-all duration-500"
+												style="width: {pred.confidence}%; background-color: {getConfidenceColor(pred.confidence)}"
+											></div>
+										</div>
+										<span class="data-mono text-[10px] text-pit-text-muted w-7 text-right">
+											{pred.confidence}%
+										</span>
+									</div>
+								</button>
+
+								<!-- Expanded factor breakdown -->
+								{#if isExpanded}
+									<div class="bg-pit-bg border border-pit-border border-t-0 px-4 py-3 space-y-2">
+										{#each pred.factors as factor}
+											<div class="flex items-center gap-3">
+												<span class="text-[10px] text-pit-text-muted w-28 shrink-0 uppercase tracking-wider">{factor.name}</span>
+												<div class="flex-1 flex items-center gap-2">
+													<div class="flex-1 h-1.5 bg-pit-border rounded-full overflow-hidden">
+														<div
+															class="h-full rounded-full"
+															style="width: {(factor.value / (factor.weight / 100)) * 100}%; background-color: {getFactorBarColor(factor.name)}"
+														></div>
+													</div>
+													<span class="text-[10px] text-pit-text-muted data-mono w-8 text-right">{factor.weight}%</span>
+												</div>
+												<span class="text-[10px] text-pit-text-dim data-mono shrink-0">{factor.detail}</span>
+											</div>
+										{/each}
+										{#if pred.reliability_warning}
+											<div class="flex items-center gap-2 mt-2 pt-2 border-t border-pit-border">
+												<span class="text-pit-yellow text-xs">&#9888;</span>
+												<span class="text-[10px] text-pit-yellow data-mono">
+													RELIABILITY WARNING — {(pred.dnf_rate * 100).toFixed(0)}% DNF rate in 2026
+												</span>
+											</div>
+										{/if}
 									</div>
 								{/if}
-
-								<!-- Confidence bar -->
-								<div class="w-24 flex items-center gap-2">
-									<div class="flex-1 h-1.5 bg-pit-border rounded-full overflow-hidden">
-										<div
-											class="h-full rounded-full transition-all duration-500"
-											style="width: {pred.confidence}%; background-color: {getConfidenceColor(pred.confidence)}"
-										></div>
-									</div>
-									<span class="data-mono text-[10px] text-pit-text-muted w-7 text-right">
-										{pred.confidence}%
-									</span>
-								</div>
-
-								<!-- Factors tooltip -->
-								<div class="hidden group-hover:block absolute right-4 top-full z-10 bg-pit-bg border border-pit-border px-3 py-2 text-[10px] text-pit-text-dim data-mono shadow-lg max-w-xs">
-									{#each pred.factors as factor}
-										<div>{factor}</div>
-									{/each}
-								</div>
 							</div>
 
 							<!-- Q2/Q1 cutoff lines -->
@@ -380,9 +427,32 @@
 											<span class="text-sm text-pit-text">
 												{mover.driver?.name_acronym ?? `#${mover.driver_number}`}
 											</span>
+											{#if mover.reliability_warning}
+												<span class="text-[10px] text-pit-yellow">&#9888;</span>
+											{/if}
 										</div>
 										<span class="data-mono text-xs" style="color: {getChangeColor(change)}">
 											{change > 0 ? '+' : ''}{change} positions
+										</span>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					<!-- Reliability Warnings -->
+					{#if prediction.predictions.some(p => p.reliability_warning)}
+						<div class="bg-pit-surface border border-pit-yellow/30 p-4">
+							<div class="flex items-center gap-2 mb-3">
+								<span class="text-pit-yellow text-sm">&#9888;</span>
+								<h3 class="heading-f1 text-xs text-pit-yellow">RELIABILITY RISKS</h3>
+							</div>
+							<div class="space-y-1.5">
+								{#each prediction.predictions.filter(p => p.reliability_warning) as risk}
+									<div class="flex items-center justify-between text-sm">
+										<span class="text-pit-text">{risk.driver?.name_acronym ?? `#${risk.driver_number}`}</span>
+										<span class="data-mono text-[10px] text-pit-yellow">
+											{(risk.dnf_rate * 100).toFixed(0)}% DNF rate
 										</span>
 									</div>
 								{/each}
@@ -440,7 +510,7 @@
 						</div>
 					</div>
 
-					<!-- Historical Accuracy -->
+					<!-- Model Info -->
 					<div class="bg-pit-surface border border-pit-border p-4">
 						<div class="flex items-center gap-2 mb-3">
 							<div class="w-0.5 h-4 bg-pit-accent"></div>
@@ -452,16 +522,24 @@
 								<span class="text-pit-text">OpenF1 API</span>
 							</div>
 							<div class="flex justify-between">
-								<span class="text-pit-text-muted">Primary signal</span>
-								<span class="text-pit-text">2026 team perf (60%)</span>
+								<span class="text-pit-text-muted">Team perf</span>
+								<span class="text-pit-text">50% — avg quali pos</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-pit-text-muted">Driver skill</span>
+								<span class="text-pit-text">15% — teammate H2H</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-pit-text-muted">Race pace</span>
+								<span class="text-pit-text">15% — grid vs finish</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-pit-text-muted">Reliability</span>
+								<span class="text-pit-text">10% — DNF rate</span>
 							</div>
 							<div class="flex justify-between">
 								<span class="text-pit-text-muted">Circuit history</span>
-								<span class="text-pit-text">2024-2025 (25%)</span>
-							</div>
-							<div class="flex justify-between">
-								<span class="text-pit-text-muted">Recent form</span>
-								<span class="text-pit-text">Last 3 races (15%)</span>
+								<span class="text-pit-text">10% — 2024-2025</span>
 							</div>
 							<div class="flex justify-between">
 								<span class="text-pit-text-muted">Stage</span>

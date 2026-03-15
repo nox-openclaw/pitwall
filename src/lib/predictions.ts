@@ -1,8 +1,7 @@
-import { getSessions, getLaps, getPositions, getDrivers, uniqueDrivers } from './api';
-import type { Session, Driver, Lap, Position } from './api';
+import { getSessions, getPositions } from './api';
+import type { Session, Driver } from './api';
 
 // Circuit overtaking difficulty multiplier
-// Low = hard to overtake (street circuits), High = easy (long straights)
 export const CIRCUIT_OVERTAKING: Record<string, number> = {
 	monaco: 0.1,
 	singapore: 0.3,
@@ -29,13 +28,23 @@ export const CIRCUIT_OVERTAKING: Record<string, number> = {
 	montreal: 0.7,
 };
 
+export interface FactorBreakdown {
+	name: string;
+	weight: number; // percentage weight
+	value: number; // raw contribution score
+	detail: string; // human-readable detail
+}
+
 export interface PredictedPosition {
 	driver_number: number;
 	driver: Driver | null;
 	predicted_position: number;
-	confidence: number; // 0-100
-	position_change?: number; // positive = gains, negative = loses
-	factors: string[];
+	confidence: number;
+	position_change?: number;
+	factors: FactorBreakdown[];
+	reliability_warning: boolean;
+	dnf_rate: number; // 0-1
+	expected_race_delta?: number; // avg positions gained/lost grid->finish
 }
 
 export interface StagePrediction {
@@ -47,23 +56,35 @@ export interface StagePrediction {
 	model_notes: string[];
 }
 
-// ============ DATA FETCHING HELPERS ============
+// ============ DATA COLLECTION ============
 
-// Fetch historical sessions for a circuit across years
-async function getHistoricalSessions(circuitShortName: string, years: number[]): Promise<Session[]> {
-	const all: Session[] = [];
-	for (const year of years) {
-		try {
-			const sessions = await getSessions({ circuit_short_name: circuitShortName, year });
-			all.push(...sessions);
-		} catch {
-			// Year might not have data
-		}
-	}
-	return all;
+interface SessionResult {
+	session_key: number;
+	session_type: string;
+	circuit_short_name: string;
+	year: number;
+	positions: Map<number, number>; // driver_number -> final position
 }
 
-// Get final positions from a session using /position endpoint
+interface TeamStats {
+	team_name: string;
+	avg_quali_position: number;
+	races_started: number;
+	dnfs: number;
+	dnf_rate: number;
+	driver_numbers: number[];
+}
+
+interface DriverStats {
+	driver_number: number;
+	team_name: string;
+	teammate_delta: number; // negative = outperforms teammate
+	teammate_battles_won: number;
+	teammate_battles_total: number;
+	avg_race_delta: number; // avg positions gained from grid to finish
+	race_delta_count: number;
+}
+
 async function getSessionResults(sessionKey: number): Promise<Map<number, number>> {
 	try {
 		const positions = await getPositions(sessionKey);
@@ -77,438 +98,469 @@ async function getSessionResults(sessionKey: number): Promise<Map<number, number
 	}
 }
 
-// Get fastest lap per driver from a session
-async function getFastestLaps(sessionKey: number): Promise<Map<number, number>> {
+/** Collect all 2026 qualifying and race results */
+async function collect2026Data(): Promise<{
+	qualiResults: SessionResult[];
+	raceResults: SessionResult[];
+}> {
+	const qualiResults: SessionResult[] = [];
+	const raceResults: SessionResult[] = [];
+
 	try {
-		const laps = await getLaps(sessionKey);
-		const fastest = new Map<number, number>();
-		for (const lap of laps) {
-			if (lap.lap_duration && !lap.is_pit_out_lap) {
-				const current = fastest.get(lap.driver_number);
-				if (!current || lap.lap_duration < current) {
-					fastest.set(lap.driver_number, lap.lap_duration);
-				}
-			}
-		}
-		return fastest;
-	} catch {
-		return new Map();
-	}
-}
+		const sessions = await getSessions({ year: 2026 });
 
-// Get drivers for a session (with deduplication)
-async function getSessionDrivers(sessionKey: number): Promise<Driver[]> {
-	try {
-		const raw = await getDrivers(sessionKey);
-		return uniqueDrivers(raw);
-	} catch {
-		return [];
-	}
-}
-
-// ============ TEAM PERFORMANCE BASELINE ============
-
-interface TeamStats {
-	team: string;
-	avgQualiPos: number;
-	avgRacePos: number;
-	racesCount: number;
-	qualiCount: number;
-	// Per-driver breakdown within team
-	driverAvgQuali: Map<number, { avg: number; count: number }>;
-	driverAvgRace: Map<number, { avg: number; count: number }>;
-	// Race vs quali delta (positive = gains positions in race)
-	avgRaceDelta: number;
-	deltaCount: number;
-}
-
-// Fetch all 2026 qualifying + race sessions and compute team baselines
-async function computeTeamBaselines(currentYear: number): Promise<Map<string, TeamStats>> {
-	const teamMap = new Map<string, TeamStats>();
-
-	const initTeam = (name: string): TeamStats => ({
-		team: name,
-		avgQualiPos: 0,
-		avgRacePos: 0,
-		racesCount: 0,
-		qualiCount: 0,
-		driverAvgQuali: new Map(),
-		driverAvgRace: new Map(),
-		avgRaceDelta: 0,
-		deltaCount: 0,
-	});
-
-	// Fetch all 2026 sessions
-	let allSessions: Session[] = [];
-	try {
-		allSessions = await getSessions({ year: currentYear });
-	} catch {
-		return teamMap;
-	}
-
-	const qualiSessions = allSessions.filter(
-		(s) => s.session_type === 'Qualifying' || s.session_name?.includes('Qualifying')
-	);
-	const raceSessions = allSessions.filter(
-		(s) => s.session_type === 'Race' || s.session_name === 'Race'
-	);
-
-	// Process qualifying sessions to get team average grid positions
-	for (const session of qualiSessions) {
-		const results = await getSessionResults(session.session_key);
-		const sessionDrivers = await getSessionDrivers(session.session_key);
-		const driverTeamMap = new Map<number, string>();
-		for (const d of sessionDrivers) {
-			driverTeamMap.set(d.driver_number, d.team_name);
-		}
-
-		for (const [driverNum, pos] of results) {
-			const team = driverTeamMap.get(driverNum);
-			if (!team) continue;
-			if (!teamMap.has(team)) teamMap.set(team, initTeam(team));
-			const stats = teamMap.get(team)!;
-
-			// Accumulate for team average (we'll divide later)
-			stats.avgQualiPos += pos;
-			stats.qualiCount++;
-
-			// Per-driver quali tracking
-			if (!stats.driverAvgQuali.has(driverNum)) {
-				stats.driverAvgQuali.set(driverNum, { avg: 0, count: 0 });
-			}
-			const dq = stats.driverAvgQuali.get(driverNum)!;
-			dq.avg += pos;
-			dq.count++;
-		}
-	}
-
-	// Process race sessions for team average race positions
-	for (const session of raceSessions) {
-		const raceResults = await getSessionResults(session.session_key);
-		const sessionDrivers = await getSessionDrivers(session.session_key);
-		const driverTeamMap = new Map<number, string>();
-		for (const d of sessionDrivers) {
-			driverTeamMap.set(d.driver_number, d.team_name);
-		}
-
-		// Find corresponding quali session for race delta
-		const qualiSession = qualiSessions.find(
-			(s) => s.meeting_key === session.meeting_key
+		const qualiSessions = sessions.filter(
+			(s) => s.session_type === 'Qualifying' || s.session_name?.includes('Qualifying')
 		);
-		const qualiResults = qualiSession ? await getSessionResults(qualiSession.session_key) : new Map<number, number>();
+		const raceSessions = sessions.filter(
+			(s) => s.session_type === 'Race' || s.session_name === 'Race'
+		);
 
-		for (const [driverNum, racePos] of raceResults) {
-			const team = driverTeamMap.get(driverNum);
-			if (!team) continue;
-			if (!teamMap.has(team)) teamMap.set(team, initTeam(team));
-			const stats = teamMap.get(team)!;
+		const [qualiPositions, racePositions] = await Promise.all([
+			Promise.all(qualiSessions.map((s) => getSessionResults(s.session_key))),
+			Promise.all(raceSessions.map((s) => getSessionResults(s.session_key))),
+		]);
 
-			stats.avgRacePos += racePos;
-			stats.racesCount++;
-
-			// Per-driver race tracking
-			if (!stats.driverAvgRace.has(driverNum)) {
-				stats.driverAvgRace.set(driverNum, { avg: 0, count: 0 });
-			}
-			const dr = stats.driverAvgRace.get(driverNum)!;
-			dr.avg += racePos;
-			dr.count++;
-
-			// Race vs quali delta
-			const qualiPos = qualiResults.get(driverNum);
-			if (qualiPos !== undefined) {
-				stats.avgRaceDelta += (qualiPos - racePos); // positive = gained positions
-				stats.deltaCount++;
+		for (let i = 0; i < qualiSessions.length; i++) {
+			if (qualiPositions[i].size > 0) {
+				qualiResults.push({
+					session_key: qualiSessions[i].session_key,
+					session_type: 'Qualifying',
+					circuit_short_name: qualiSessions[i].circuit_short_name,
+					year: 2026,
+					positions: qualiPositions[i],
+				});
 			}
 		}
+
+		for (let i = 0; i < raceSessions.length; i++) {
+			if (racePositions[i].size > 0) {
+				raceResults.push({
+					session_key: raceSessions[i].session_key,
+					session_type: 'Race',
+					circuit_short_name: raceSessions[i].circuit_short_name,
+					year: 2026,
+					positions: racePositions[i],
+				});
+			}
+		}
+	} catch {
+		// No 2026 data available yet
 	}
 
-	// Finalize averages
-	for (const stats of teamMap.values()) {
-		if (stats.qualiCount > 0) stats.avgQualiPos /= stats.qualiCount;
-		if (stats.racesCount > 0) stats.avgRacePos /= stats.racesCount;
-		if (stats.deltaCount > 0) stats.avgRaceDelta /= stats.deltaCount;
-
-		for (const dq of stats.driverAvgQuali.values()) {
-			if (dq.count > 0) dq.avg /= dq.count;
-		}
-		for (const dr of stats.driverAvgRace.values()) {
-			if (dr.count > 0) dr.avg /= dr.count;
-		}
-	}
-
-	return teamMap;
+	return { qualiResults, raceResults };
 }
 
-// ============ CIRCUIT HISTORY (TEAM-BASED) ============
-
-interface CircuitHistoryScore {
-	team: string;
-	avgPos: number;
-	dataPoints: number;
-}
-
-async function computeCircuitHistory(
+/** Collect historical data for a specific circuit */
+async function collectCircuitHistory(
 	circuitShortName: string,
 	years: number[]
-): Promise<Map<string, CircuitHistoryScore>> {
-	const teamScores = new Map<string, CircuitHistoryScore>();
-	const historicalSessions = await getHistoricalSessions(circuitShortName, years);
+): Promise<{ qualiResults: SessionResult[]; raceResults: SessionResult[] }> {
+	const qualiResults: SessionResult[] = [];
+	const raceResults: SessionResult[] = [];
 
-	const relevantSessions = historicalSessions.filter(
-		(s) =>
-			s.session_type === 'Qualifying' ||
-			s.session_type === 'Race' ||
-			s.session_name?.includes('Qualifying') ||
-			s.session_name === 'Race'
-	);
+	for (const year of years) {
+		try {
+			const sessions = await getSessions({ circuit_short_name: circuitShortName, year });
+			const qualiSession = sessions.find(
+				(s) => s.session_type === 'Qualifying' || s.session_name?.includes('Qualifying')
+			);
+			const raceSession = sessions.find(
+				(s) => s.session_type === 'Race' || s.session_name === 'Race'
+			);
 
-	for (const session of relevantSessions) {
-		const results = await getSessionResults(session.session_key);
-		const sessionDrivers = await getSessionDrivers(session.session_key);
-		const driverTeamMap = new Map<number, string>();
-		for (const d of sessionDrivers) {
-			driverTeamMap.set(d.driver_number, d.team_name);
-		}
-
-		for (const [driverNum, pos] of results) {
-			const team = driverTeamMap.get(driverNum);
-			if (!team) continue;
-
-			if (!teamScores.has(team)) {
-				teamScores.set(team, { team, avgPos: 0, dataPoints: 0 });
+			if (qualiSession) {
+				const positions = await getSessionResults(qualiSession.session_key);
+				if (positions.size > 0) {
+					qualiResults.push({
+						session_key: qualiSession.session_key,
+						session_type: 'Qualifying',
+						circuit_short_name: circuitShortName,
+						year,
+						positions,
+					});
+				}
 			}
-			const entry = teamScores.get(team)!;
-			entry.avgPos += pos;
-			entry.dataPoints++;
+			if (raceSession) {
+				const positions = await getSessionResults(raceSession.session_key);
+				if (positions.size > 0) {
+					raceResults.push({
+						session_key: raceSession.session_key,
+						session_type: 'Race',
+						circuit_short_name: raceSession.circuit_short_name,
+						year,
+						positions,
+					});
+				}
+			}
+		} catch {
+			// Year might not have data
 		}
 	}
 
-	// Finalize averages
-	for (const entry of teamScores.values()) {
-		if (entry.dataPoints > 0) entry.avgPos /= entry.dataPoints;
-	}
-
-	return teamScores;
+	return { qualiResults, raceResults };
 }
 
-// ============ RECENT FORM (DRIVER-LEVEL) ============
+// ============ FACTOR CALCULATIONS ============
 
-interface RecentFormScore {
-	driverNumber: number;
-	avgFinish: number;
-	races: number;
-	trend: number; // negative = improving (positions getting lower), positive = declining
-	results: { circuit: string; pos: number }[];
-}
+/** Factor 1: Team Performance (50%) — avg qualifying position across all 2026 sessions */
+function calcTeamPerformance(
+	qualiResults: SessionResult[],
+	drivers: Driver[]
+): Map<string, TeamStats> {
+	const teamMap = new Map<string, { positions: number[]; driver_numbers: Set<number> }>();
 
-async function computeRecentForm(
-	currentYear: number,
-	driverNumbers: number[]
-): Promise<Map<number, RecentFormScore>> {
-	const formMap = new Map<number, RecentFormScore>();
-	for (const dn of driverNumbers) {
-		formMap.set(dn, { driverNumber: dn, avgFinish: 0, races: 0, trend: 0, results: [] });
+	for (const d of drivers) {
+		if (!teamMap.has(d.team_name)) {
+			teamMap.set(d.team_name, { positions: [], driver_numbers: new Set() });
+		}
+		teamMap.get(d.team_name)!.driver_numbers.add(d.driver_number);
 	}
 
-	try {
-		const raceSessions = await getSessions({ year: currentYear, session_type: 'Race' });
-		const lastThree = raceSessions.slice(-3);
-
-		for (const session of lastThree) {
-			const results = await getSessionResults(session.session_key);
-			for (const [driverNum, pos] of results) {
-				const entry = formMap.get(driverNum);
-				if (entry) {
-					entry.avgFinish += pos;
-					entry.races++;
-					entry.results.push({ circuit: session.circuit_short_name, pos });
+	for (const result of qualiResults) {
+		for (const [driverNum, pos] of result.positions) {
+			for (const [, data] of teamMap) {
+				if (data.driver_numbers.has(driverNum)) {
+					data.positions.push(pos);
 				}
 			}
 		}
-	} catch {
-		// No recent data
 	}
 
-	// Finalize
-	for (const entry of formMap.values()) {
-		if (entry.races > 0) {
-			entry.avgFinish /= entry.races;
-			// Trend: compare first half vs second half of results
-			if (entry.results.length >= 2) {
-				const mid = Math.floor(entry.results.length / 2);
-				const earlyAvg = entry.results.slice(0, mid).reduce((s, r) => s + r.pos, 0) / mid;
-				const lateAvg = entry.results.slice(mid).reduce((s, r) => s + r.pos, 0) / (entry.results.length - mid);
-				entry.trend = lateAvg - earlyAvg; // negative = improving
-			}
-		}
-	}
-
-	return formMap;
-}
-
-// ============ WEIGHTED PREDICTION BUILDER ============
-
-const WEIGHT_TEAM_PERFORMANCE = 0.60;
-const WEIGHT_CIRCUIT_HISTORY = 0.25;
-const WEIGHT_RECENT_FORM = 0.15;
-
-interface DriverScore {
-	driverNumber: number;
-	driver: Driver | null;
-	teamScore: number;       // 0-1, higher = better
-	circuitScore: number;    // 0-1, higher = better
-	formScore: number;       // 0-1, higher = better
-	weightedScore: number;   // final combined score
-	factors: string[];
-	dataPoints: number;
-	raceDelta: number;       // avg positions gained in race vs quali
-}
-
-function buildWeightedPredictions(
-	currentDrivers: Driver[],
-	teamBaselines: Map<string, TeamStats>,
-	circuitHistory: Map<string, CircuitHistoryScore>,
-	recentForm: Map<number, RecentFormScore>,
-	stage: 'pre-quali' | 'qualifying' | 'race',
-	gridPositions?: Map<number, number>,
-	overtakingFactor?: number
-): PredictedPosition[] {
-	const scores: DriverScore[] = [];
-
-	// Find best/worst team performance for normalization
-	const allTeamQualiAvgs = [...teamBaselines.values()]
-		.filter((t) => t.qualiCount > 0)
-		.map((t) => t.avgQualiPos);
-	const bestTeamPos = Math.min(...allTeamQualiAvgs, 20);
-	const worstTeamPos = Math.max(...allTeamQualiAvgs, 1);
-	const teamRange = worstTeamPos - bestTeamPos || 1;
-
-	// Find best/worst circuit history for normalization
-	const allCircuitAvgs = [...circuitHistory.values()]
-		.filter((c) => c.dataPoints > 0)
-		.map((c) => c.avgPos);
-	const bestCircuitPos = Math.min(...allCircuitAvgs, 20);
-	const worstCircuitPos = Math.max(...allCircuitAvgs, 1);
-	const circuitRange = worstCircuitPos - bestCircuitPos || 1;
-
-	// Find best/worst recent form for normalization
-	const allFormAvgs = [...recentForm.values()]
-		.filter((f) => f.races > 0)
-		.map((f) => f.avgFinish);
-	const bestFormPos = Math.min(...allFormAvgs, 20);
-	const worstFormPos = Math.max(...allFormAvgs, 1);
-	const formRange = worstFormPos - bestFormPos || 1;
-
-	for (const driver of currentDrivers) {
-		const teamStats = teamBaselines.get(driver.team_name);
-		const circuitStats = circuitHistory.get(driver.team_name);
-		const form = recentForm.get(driver.driver_number);
-
-		const factors: string[] = [];
-		let dataPoints = 0;
-
-		// Team performance score (inverted: lower position = higher score)
-		let teamScore = 0.5; // default for unknown teams
-		if (teamStats && teamStats.qualiCount > 0) {
-			// Use driver-specific avg within team if available, else team avg
-			const driverQuali = teamStats.driverAvgQuali.get(driver.driver_number);
-			const avgPos = driverQuali && driverQuali.count > 0 ? driverQuali.avg : teamStats.avgQualiPos;
-			teamScore = 1 - (avgPos - bestTeamPos) / teamRange;
-			teamScore = Math.max(0, Math.min(1, teamScore));
-			factors.push(`2026 avg grid: P${avgPos.toFixed(1)}`);
-			dataPoints += teamStats.qualiCount;
-		}
-
-		// Circuit history score (team-based)
-		let circuitScore = 0.5;
-		if (circuitStats && circuitStats.dataPoints > 0) {
-			circuitScore = 1 - (circuitStats.avgPos - bestCircuitPos) / circuitRange;
-			circuitScore = Math.max(0, Math.min(1, circuitScore));
-			factors.push(`Circuit history: P${circuitStats.avgPos.toFixed(1)} avg`);
-			dataPoints += circuitStats.dataPoints;
-		} else {
-			factors.push('No circuit history');
-		}
-
-		// Recent form score (driver-level)
-		let formScore = 0.5;
-		if (form && form.races > 0) {
-			formScore = 1 - (form.avgFinish - bestFormPos) / formRange;
-			formScore = Math.max(0, Math.min(1, formScore));
-			const trendLabel = form.trend < -1 ? ' (trending up)' : form.trend > 1 ? ' (trending down)' : '';
-			factors.push(`Recent form: P${form.avgFinish.toFixed(1)} avg${trendLabel}`);
-			dataPoints += form.races;
-		}
-
-		// Race delta (used in race stage)
-		let raceDelta = 0;
-		if (teamStats && teamStats.deltaCount > 0) {
-			raceDelta = teamStats.avgRaceDelta;
-		}
-
-		// Weighted combination
-		let weightedScore = teamScore * WEIGHT_TEAM_PERFORMANCE +
-			circuitScore * WEIGHT_CIRCUIT_HISTORY +
-			formScore * WEIGHT_RECENT_FORM;
-
-		// For race predictions: adjust by race delta and grid position
-		if (stage === 'race' && gridPositions) {
-			const gridPos = gridPositions.get(driver.driver_number);
-			if (gridPos !== undefined) {
-				factors.push(`Grid: P${gridPos}`);
-				// Grid position influence (higher at low-overtaking circuits)
-				const of = overtakingFactor ?? 0.6;
-				const gridInfluence = 0.3 - of * 0.15; // Monaco: 0.285, Monza: 0.0
-				const gridScore = 1 - (gridPos - 1) / 19;
-				weightedScore = weightedScore * (1 - gridInfluence) + gridScore * gridInfluence;
-			}
-
-			if (Math.abs(raceDelta) >= 0.5) {
-				factors.push(`Race delta: ${raceDelta > 0 ? '+' : ''}${raceDelta.toFixed(1)} pos avg`);
-			}
-		}
-
-		scores.push({
-			driverNumber: driver.driver_number,
-			driver,
-			teamScore,
-			circuitScore,
-			formScore,
-			weightedScore,
-			factors,
-			dataPoints,
-			raceDelta,
+	const stats = new Map<string, TeamStats>();
+	for (const [team, data] of teamMap) {
+		const avg =
+			data.positions.length > 0
+				? data.positions.reduce((a, b) => a + b, 0) / data.positions.length
+				: 10;
+		stats.set(team, {
+			team_name: team,
+			avg_quali_position: avg,
+			races_started: 0,
+			dnfs: 0,
+			dnf_rate: 0,
+			driver_numbers: [...data.driver_numbers],
 		});
 	}
 
-	// Sort by weighted score (highest = best predicted position)
-	scores.sort((a, b) => b.weightedScore - a.weightedScore);
+	return stats;
+}
 
-	// Assign positions and calculate confidence
-	return scores.map((s, i) => {
-		// Confidence based on data availability and score separation
-		const dataCoverage = Math.min(s.dataPoints / 10, 1.0);
-		const hasTeamData = s.teamScore !== 0.5 ? 1 : 0;
-		const hasCircuitData = s.circuitScore !== 0.5 ? 1 : 0;
-		const hasFormData = s.formScore !== 0.5 ? 1 : 0;
-		const sourceCoverage = (hasTeamData + hasCircuitData + hasFormData) / 3;
+/** Factor 2: Driver Skill Delta (15%) — teammate head-to-head in qualifying */
+function calcDriverSkillDelta(
+	qualiResults: SessionResult[],
+	drivers: Driver[]
+): Map<number, DriverStats> {
+	const stats = new Map<number, DriverStats>();
+	for (const d of drivers) {
+		stats.set(d.driver_number, {
+			driver_number: d.driver_number,
+			team_name: d.team_name,
+			teammate_delta: 0,
+			teammate_battles_won: 0,
+			teammate_battles_total: 0,
+			avg_race_delta: 0,
+			race_delta_count: 0,
+		});
+	}
 
-		const confidence = Math.round(
-			Math.max(5, Math.min(95, dataCoverage * 40 + sourceCoverage * 40 + 15))
+	const teams = new Map<string, Driver[]>();
+	for (const d of drivers) {
+		if (!teams.has(d.team_name)) teams.set(d.team_name, []);
+		teams.get(d.team_name)!.push(d);
+	}
+
+	for (const result of qualiResults) {
+		for (const [, teammates] of teams) {
+			if (teammates.length !== 2) continue;
+			const [d1, d2] = teammates;
+			const pos1 = result.positions.get(d1.driver_number);
+			const pos2 = result.positions.get(d2.driver_number);
+			if (pos1 === undefined || pos2 === undefined) continue;
+
+			const s1 = stats.get(d1.driver_number)!;
+			const s2 = stats.get(d2.driver_number)!;
+
+			s1.teammate_battles_total++;
+			s2.teammate_battles_total++;
+
+			if (pos1 < pos2) {
+				s1.teammate_battles_won++;
+				s1.teammate_delta -= 1;
+				s2.teammate_delta += 1;
+			} else {
+				s2.teammate_battles_won++;
+				s2.teammate_delta -= 1;
+				s1.teammate_delta += 1;
+			}
+		}
+	}
+
+	return stats;
+}
+
+/** Factor 3: Race Pace vs Grid (15%) — avg positions gained/lost from grid to finish */
+function calcRacePaceDelta(
+	qualiResults: SessionResult[],
+	raceResults: SessionResult[],
+	driverStats: Map<number, DriverStats>
+): void {
+	for (const race of raceResults) {
+		const quali = qualiResults.find(
+			(q) => q.circuit_short_name === race.circuit_short_name && q.year === race.year
+		);
+		if (!quali) continue;
+
+		for (const [driverNum, racePos] of race.positions) {
+			const qualiPos = quali.positions.get(driverNum);
+			const ds = driverStats.get(driverNum);
+			if (qualiPos === undefined || !ds) continue;
+
+			const delta = qualiPos - racePos; // positive = gained positions in race
+			ds.avg_race_delta =
+				(ds.avg_race_delta * ds.race_delta_count + delta) / (ds.race_delta_count + 1);
+			ds.race_delta_count++;
+		}
+	}
+}
+
+/** Factor 4: Reliability (10%) — DNF rate per team */
+function calcReliability(
+	qualiResults: SessionResult[],
+	raceResults: SessionResult[],
+	teamStats: Map<string, TeamStats>,
+	drivers: Driver[]
+): void {
+	const teamDrivers = new Map<string, Set<number>>();
+	for (const d of drivers) {
+		if (!teamDrivers.has(d.team_name)) teamDrivers.set(d.team_name, new Set());
+		teamDrivers.get(d.team_name)!.add(d.driver_number);
+	}
+
+	for (const race of raceResults) {
+		const quali = qualiResults.find(
+			(q) => q.circuit_short_name === race.circuit_short_name && q.year === race.year
 		);
 
+		for (const [team, driverNums] of teamDrivers) {
+			const ts = teamStats.get(team);
+			if (!ts) continue;
+
+			for (const driverNum of driverNums) {
+				const inQuali = quali?.positions.has(driverNum);
+				const inRace = race.positions.has(driverNum);
+
+				if (inQuali || inRace) {
+					ts.races_started++;
+					if (inQuali && !inRace) {
+						ts.dnfs++;
+					}
+				}
+			}
+		}
+	}
+
+	for (const [, ts] of teamStats) {
+		ts.dnf_rate = ts.races_started > 0 ? ts.dnfs / ts.races_started : 0;
+	}
+}
+
+/** Factor 5: Circuit History (10%) — same team at same track in 2024/2025 */
+function calcCircuitHistory(
+	historyResults: SessionResult[],
+	drivers: Driver[]
+): Map<number, { avgPos: number; count: number }> {
+	const history = new Map<number, { total: number; count: number }>();
+
+	for (const result of historyResults) {
+		for (const [driverNum, pos] of result.positions) {
+			const existing = history.get(driverNum) ?? { total: 0, count: 0 };
+			existing.total += pos;
+			existing.count++;
+			history.set(driverNum, existing);
+		}
+	}
+
+	// Also map by team — if driver wasn't there but team was, use team average
+	const teamHistory = new Map<string, { total: number; count: number }>();
+	for (const result of historyResults) {
+		for (const [driverNum, pos] of result.positions) {
+			const driver = drivers.find((d) => d.driver_number === driverNum);
+			if (driver) {
+				const existing = teamHistory.get(driver.team_name) ?? { total: 0, count: 0 };
+				existing.total += pos;
+				existing.count++;
+				teamHistory.set(driver.team_name, existing);
+			}
+		}
+	}
+
+	const result = new Map<number, { avgPos: number; count: number }>();
+	for (const d of drivers) {
+		const personal = history.get(d.driver_number);
+		if (personal && personal.count > 0) {
+			result.set(d.driver_number, {
+				avgPos: personal.total / personal.count,
+				count: personal.count,
+			});
+		} else {
+			const team = teamHistory.get(d.team_name);
+			if (team && team.count > 0) {
+				result.set(d.driver_number, {
+					avgPos: team.total / team.count,
+					count: team.count,
+				});
+			}
+		}
+	}
+
+	return result;
+}
+
+// ============ SCORING ============
+
+const WEIGHTS = {
+	teamPerformance: 0.5,
+	driverSkill: 0.15,
+	racePace: 0.15,
+	reliability: 0.1,
+	circuitHistory: 0.1,
+};
+
+function scoreDrivers(
+	drivers: Driver[],
+	teamStats: Map<string, TeamStats>,
+	driverStats: Map<number, DriverStats>,
+	circuitHistory: Map<number, { avgPos: number; count: number }>
+): PredictedPosition[] {
+	const maxPos = 20;
+	const scores: {
+		driver_number: number;
+		driver: Driver | null;
+		total_score: number;
+		factors: FactorBreakdown[];
+		reliability_warning: boolean;
+		dnf_rate: number;
+		expected_race_delta: number;
+	}[] = [];
+
+	for (const d of drivers) {
+		const ts = teamStats.get(d.team_name);
+		const ds = driverStats.get(d.driver_number);
+		const ch = circuitHistory.get(d.driver_number);
+		const factors: FactorBreakdown[] = [];
+		let totalScore = 0;
+
+		// Factor 1: Team Performance (50%)
+		const teamAvg = ts?.avg_quali_position ?? 10;
+		const teamScore = (maxPos + 1 - Math.min(teamAvg, maxPos)) / maxPos;
+		const teamContrib = teamScore * WEIGHTS.teamPerformance;
+		totalScore += teamContrib;
+		factors.push({
+			name: 'Team Performance',
+			weight: 50,
+			value: teamContrib,
+			detail: `Avg quali P${teamAvg.toFixed(1)}`,
+		});
+
+		// Factor 2: Driver Skill Delta (15%)
+		const delta = ds?.teammate_delta ?? 0;
+		const battles = ds?.teammate_battles_total ?? 0;
+		const skillScore = battles > 0 ? Math.max(0, Math.min(1, 0.5 - delta / (battles * 2))) : 0.5;
+		const skillContrib = skillScore * WEIGHTS.driverSkill;
+		totalScore += skillContrib;
+		const wonBattles = ds?.teammate_battles_won ?? 0;
+		factors.push({
+			name: 'Driver Skill',
+			weight: 15,
+			value: skillContrib,
+			detail:
+				battles > 0
+					? `${wonBattles}/${battles} teammate battles won`
+					: 'No head-to-head data',
+		});
+
+		// Factor 3: Race Pace vs Grid (15%)
+		const raceDelta = ds?.avg_race_delta ?? 0;
+		const raceDeltaCount = ds?.race_delta_count ?? 0;
+		const racePaceScore = Math.max(0, Math.min(1, 0.5 + raceDelta / 10));
+		const racePaceContrib = racePaceScore * WEIGHTS.racePace;
+		totalScore += racePaceContrib;
+		factors.push({
+			name: 'Race Pace vs Grid',
+			weight: 15,
+			value: racePaceContrib,
+			detail:
+				raceDeltaCount > 0
+					? `Avg ${raceDelta >= 0 ? '+' : ''}${raceDelta.toFixed(1)} positions`
+					: 'No race data',
+		});
+
+		// Factor 4: Reliability (10%)
+		const dnfRate = ts?.dnf_rate ?? 0;
+		const reliabilityScore = 1 - dnfRate;
+		const reliabilityContrib = reliabilityScore * WEIGHTS.reliability;
+		totalScore += reliabilityContrib;
+		factors.push({
+			name: 'Reliability',
+			weight: 10,
+			value: reliabilityContrib,
+			detail:
+				ts && ts.races_started > 0
+					? `${ts.dnfs} DNFs in ${ts.races_started} starts (${(dnfRate * 100).toFixed(0)}%)`
+					: 'No reliability data',
+		});
+
+		// Factor 5: Circuit History (10%)
+		const histAvg = ch?.avgPos ?? 10;
+		const histCount = ch?.count ?? 0;
+		const histScore = (maxPos + 1 - Math.min(histAvg, maxPos)) / maxPos;
+		const histContrib = histScore * WEIGHTS.circuitHistory;
+		totalScore += histContrib;
+		factors.push({
+			name: 'Circuit History',
+			weight: 10,
+			value: histContrib,
+			detail:
+				histCount > 0
+					? `Avg P${histAvg.toFixed(1)} at this track (${histCount} sessions)`
+					: 'No circuit history',
+		});
+
+		scores.push({
+			driver_number: d.driver_number,
+			driver: d,
+			total_score: totalScore,
+			factors,
+			reliability_warning: dnfRate > 0.2,
+			dnf_rate: dnfRate,
+			expected_race_delta: raceDelta,
+		});
+	}
+
+	scores.sort((a, b) => b.total_score - a.total_score);
+
+	const maxScore = scores[0]?.total_score ?? 1;
+	return scores.map((s, i) => {
+		const scorePct = maxScore > 0 ? (s.total_score / maxScore) * 100 : 50;
+		const dataFactors = s.factors.filter((f) => !f.detail.includes('No ')).length;
+		const dataPct = (dataFactors / 5) * 100;
+		const confidence = Math.round(Math.max(5, Math.min(95, scorePct * 0.6 + dataPct * 0.4)));
+
 		return {
-			driver_number: s.driverNumber,
+			driver_number: s.driver_number,
 			driver: s.driver,
 			predicted_position: i + 1,
 			confidence,
-			factors: s.factors.slice(0, 5),
+			factors: s.factors,
+			reliability_warning: s.reliability_warning,
+			dnf_rate: s.dnf_rate,
+			expected_race_delta: s.expected_race_delta,
 		};
 	});
 }
 
-// ============ STAGE 1: PRE-QUALIFYING PREDICTION ============
+// ============ PUBLIC API ============
 
 export async function predictPreQuali(
 	circuitShortName: string,
@@ -517,48 +569,35 @@ export async function predictPreQuali(
 ): Promise<StagePrediction> {
 	const notes: string[] = [];
 
-	// Step 1: Team performance baselines from all 2026 data
-	const teamBaselines = await computeTeamBaselines(currentYear);
-	const teamsWithData = [...teamBaselines.values()].filter((t) => t.qualiCount > 0);
-	if (teamsWithData.length > 0) {
-		notes.push(`Team baselines from ${teamsWithData.length} teams across 2026 season`);
-		// Show top 3 teams
-		const sorted = teamsWithData.sort((a, b) => a.avgQualiPos - b.avgQualiPos);
-		const topTeams = sorted.slice(0, 3).map((t) => `${t.team} (P${t.avgQualiPos.toFixed(1)})`);
-		notes.push(`Top teams: ${topTeams.join(', ')}`);
-	} else {
-		notes.push('No 2026 qualifying data available yet');
+	const { qualiResults, raceResults } = await collect2026Data();
+	notes.push(`Analyzed ${qualiResults.length} qualifying sessions, ${raceResults.length} races from 2026`);
+
+	const teamStats = calcTeamPerformance(qualiResults, currentDrivers);
+	const driverStats = calcDriverSkillDelta(qualiResults, currentDrivers);
+	calcRacePaceDelta(qualiResults, raceResults, driverStats);
+	calcReliability(qualiResults, raceResults, teamStats, currentDrivers);
+
+	const { qualiResults: histQuali } = await collectCircuitHistory(circuitShortName, [
+		currentYear - 1,
+		currentYear - 2,
+	]);
+	const circuitHistory = calcCircuitHistory(histQuali, currentDrivers);
+	if (histQuali.length > 0) {
+		notes.push(`Circuit history: ${histQuali.length} sessions from 2024-2025`);
 	}
 
-	// Step 2: Circuit history (team-level)
-	const circuitHistory = await computeCircuitHistory(circuitShortName, [currentYear - 1, currentYear - 2]);
-	const circuitTeams = [...circuitHistory.values()].filter((c) => c.dataPoints > 0);
-	if (circuitTeams.length > 0) {
-		notes.push(`Circuit history from ${circuitTeams.length} teams at ${circuitShortName}`);
+	for (const [team, ts] of teamStats) {
+		if (ts.dnf_rate > 0.2) {
+			notes.push(`${team}: ${(ts.dnf_rate * 100).toFixed(0)}% DNF rate — reliability concern`);
+		}
 	}
 
-	// Step 3: Recent form
-	const driverNumbers = currentDrivers.map((d) => d.driver_number);
-	const recentForm = await computeRecentForm(currentYear, driverNumbers);
-	const driversWithForm = [...recentForm.values()].filter((f) => f.races > 0);
-	if (driversWithForm.length > 0) {
-		notes.push(`Recent form from last ${driversWithForm[0].races} race(s)`);
-	}
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, circuitHistory);
 
-	const predictions = buildWeightedPredictions(
-		currentDrivers,
-		teamBaselines,
-		circuitHistory,
-		recentForm,
-		'pre-quali'
-	);
-
-	notes.push(`Weights: Team ${WEIGHT_TEAM_PERFORMANCE * 100}% / Circuit ${WEIGHT_CIRCUIT_HISTORY * 100}% / Form ${WEIGHT_RECENT_FORM * 100}%`);
+	notes.push('Weights: Team 50% | Driver 15% | Race pace 15% | Reliability 10% | Circuit 10%');
 
 	return { stage: 'pre-quali', predictions, model_notes: notes };
 }
-
-// ============ STAGE 2: QUALIFYING PREDICTION ============
 
 export async function predictQualifying(
 	circuitShortName: string,
@@ -568,77 +607,34 @@ export async function predictQualifying(
 ): Promise<StagePrediction> {
 	const notes: string[] = [];
 
-	// Step 1: Team baselines
-	const teamBaselines = await computeTeamBaselines(currentYear);
-	const teamsWithData = [...teamBaselines.values()].filter((t) => t.qualiCount > 0);
-	if (teamsWithData.length > 0) {
-		notes.push(`Team baselines from ${teamsWithData.length} teams`);
+	const { qualiResults, raceResults } = await collect2026Data();
+	notes.push(`Analyzed ${qualiResults.length} qualifying sessions from 2026`);
+
+	const teamStats = calcTeamPerformance(qualiResults, currentDrivers);
+	const driverStats = calcDriverSkillDelta(qualiResults, currentDrivers);
+	calcRacePaceDelta(qualiResults, raceResults, driverStats);
+	calcReliability(qualiResults, raceResults, teamStats, currentDrivers);
+
+	const { qualiResults: histQuali } = await collectCircuitHistory(circuitShortName, [
+		currentYear - 1,
+		currentYear - 2,
+	]);
+	const circuitHistory = calcCircuitHistory(histQuali, currentDrivers);
+	if (histQuali.length > 0) {
+		notes.push(`Circuit history: ${histQuali.length} sessions from 2024-2025`);
 	}
 
-	// Step 2: Circuit history
-	const circuitHistory = await computeCircuitHistory(circuitShortName, [currentYear - 1, currentYear - 2]);
-
-	// Step 3: Recent form — but augment with FP pace if available
-	const driverNumbers = currentDrivers.map((d) => d.driver_number);
-	const recentForm = await computeRecentForm(currentYear, driverNumbers);
-
-	// FP pace bonus: adjust recent form scores based on practice performance
-	let fpDataFound = false;
-	const fpBestTimes = new Map<number, number>();
-	for (const fpKey of fpSessionKeys) {
-		const fastest = await getFastestLaps(fpKey);
-		if (fastest.size > 0) fpDataFound = true;
-		for (const [driverNum, time] of fastest) {
-			const current = fpBestTimes.get(driverNum);
-			if (!current || time < current) {
-				fpBestTimes.set(driverNum, time);
-			}
+	for (const [team, ts] of teamStats) {
+		if (ts.dnf_rate > 0.2) {
+			notes.push(`${team}: ${(ts.dnf_rate * 100).toFixed(0)}% DNF rate — reliability concern`);
 		}
 	}
 
-	// If we have FP data, blend it into the form scores
-	if (fpDataFound && fpBestTimes.size > 0) {
-		const sorted = [...fpBestTimes.entries()].sort((a, b) => a[1] - b[1]);
-		const fastestTime = sorted[0][1];
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, circuitHistory);
 
-		for (let i = 0; i < sorted.length; i++) {
-			const [driverNum, time] = sorted[i];
-			const form = recentForm.get(driverNum);
-			if (form) {
-				// Blend FP ranking into form: FP position weighted heavily
-				const fpPosition = i + 1;
-				const gap = time - fastestTime;
-				if (form.races > 0) {
-					// Blend: 60% FP pace, 40% recent form for quali prediction
-					form.avgFinish = fpPosition * 0.6 + form.avgFinish * 0.4;
-				} else {
-					form.avgFinish = fpPosition;
-					form.races = 1;
-				}
-				form.results.push({ circuit: 'FP', pos: fpPosition });
-				form.trend = 0; // Reset trend, FP data is most current
-			}
-		}
-
-		notes.push(`Practice pace from ${fpSessionKeys.length} FP session(s) — blended into form`);
-	}
-
-	const predictions = buildWeightedPredictions(
-		currentDrivers,
-		teamBaselines,
-		circuitHistory,
-		recentForm,
-		'qualifying'
-	);
-
-	// Q1/Q2 dropouts
 	const q1Dropouts = predictions.slice(15);
 	const q2Dropouts = predictions.slice(10, 15);
 
-	const circuitTeams = [...circuitHistory.values()].filter((c) => c.dataPoints > 0);
-	if (circuitTeams.length > 0) {
-		notes.push(`Circuit history from ${circuitTeams.length} teams at ${circuitShortName}`);
-	}
 	notes.push('Q1 cutoff: P16-P20, Q2 cutoff: P11-P15');
 
 	return {
@@ -650,8 +646,6 @@ export async function predictQualifying(
 	};
 }
 
-// ============ STAGE 3: RACE PREDICTION ============
-
 export async function predictRace(
 	circuitShortName: string,
 	currentYear: number,
@@ -661,58 +655,52 @@ export async function predictRace(
 	const notes: string[] = [];
 	const overtakingFactor = CIRCUIT_OVERTAKING[circuitShortName] ?? 0.6;
 
-	// Step 1: Team baselines (includes race delta)
-	const teamBaselines = await computeTeamBaselines(currentYear);
-	const teamsWithData = [...teamBaselines.values()].filter((t) => t.racesCount > 0);
-	if (teamsWithData.length > 0) {
-		notes.push(`Team baselines from ${teamsWithData.length} teams`);
-		// Show teams with best race delta
-		const deltaTeams = teamsWithData
-			.filter((t) => Math.abs(t.avgRaceDelta) >= 0.5)
-			.sort((a, b) => b.avgRaceDelta - a.avgRaceDelta);
-		if (deltaTeams.length > 0) {
-			const gainers = deltaTeams.filter((t) => t.avgRaceDelta > 0).slice(0, 2);
-			if (gainers.length > 0) {
-				notes.push(`Race gainers: ${gainers.map((t) => `${t.team} (+${t.avgRaceDelta.toFixed(1)})`).join(', ')}`);
-			}
+	const { qualiResults, raceResults } = await collect2026Data();
+	notes.push(`Analyzed ${raceResults.length} races, ${qualiResults.length} qualifyings from 2026`);
+
+	const teamStats = calcTeamPerformance(qualiResults, currentDrivers);
+	const driverStats = calcDriverSkillDelta(qualiResults, currentDrivers);
+	calcRacePaceDelta(qualiResults, raceResults, driverStats);
+	calcReliability(qualiResults, raceResults, teamStats, currentDrivers);
+
+	const { qualiResults: histQuali, raceResults: histRace } = await collectCircuitHistory(
+		circuitShortName,
+		[currentYear - 1, currentYear - 2]
+	);
+	const circuitHistory = calcCircuitHistory(
+		histRace.length > 0 ? histRace : histQuali,
+		currentDrivers
+	);
+	if (histRace.length > 0 || histQuali.length > 0) {
+		notes.push(`Circuit history: ${histRace.length + histQuali.length} sessions from 2024-2025`);
+	}
+
+	notes.push(
+		`Overtaking difficulty: ${overtakingFactor.toFixed(1)}x (${overtakingFactor < 0.5 ? 'hard' : overtakingFactor > 1.0 ? 'easy' : 'medium'})`
+	);
+
+	for (const [team, ts] of teamStats) {
+		if (ts.dnf_rate > 0.2) {
+			notes.push(`${team}: ${(ts.dnf_rate * 100).toFixed(0)}% DNF rate — reliability concern`);
 		}
 	}
 
-	// Step 2: Circuit history
-	const circuitHistory = await computeCircuitHistory(circuitShortName, [currentYear - 1, currentYear - 2]);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, circuitHistory);
 
-	// Step 3: Recent form
-	const driverNumbers = currentDrivers.map((d) => d.driver_number);
-	const recentForm = await computeRecentForm(currentYear, driverNumbers);
-
-	notes.push(`Overtaking factor: ${overtakingFactor.toFixed(1)}x (${overtakingFactor < 0.5 ? 'hard' : overtakingFactor > 1.0 ? 'easy' : 'medium'})`);
-
-	const predictions = buildWeightedPredictions(
-		currentDrivers,
-		teamBaselines,
-		circuitHistory,
-		recentForm,
-		'race',
-		gridPositions,
-		overtakingFactor
-	);
-
-	// Calculate expected movers (compare predicted race position to grid)
-	const expectedMovers: PredictedPosition[] = [];
+	// Calculate position changes from grid
 	for (const pred of predictions) {
 		const gridPos = gridPositions.get(pred.driver_number);
 		if (gridPos !== undefined) {
-			const change = gridPos - pred.predicted_position;
-			pred.position_change = change;
-			if (Math.abs(change) >= 2) {
-				expectedMovers.push({ ...pred });
-			}
+			pred.position_change = gridPos - pred.predicted_position;
 		}
 	}
-	expectedMovers.sort((a, b) => Math.abs(b.position_change ?? 0) - Math.abs(a.position_change ?? 0));
 
-	notes.push(`Weights: Team ${WEIGHT_TEAM_PERFORMANCE * 100}% / Circuit ${WEIGHT_CIRCUIT_HISTORY * 100}% / Form ${WEIGHT_RECENT_FORM * 100}%`);
-	notes.push('Position changes relative to qualifying grid');
+	const expectedMovers = predictions
+		.filter((p) => p.position_change !== undefined && Math.abs(p.position_change!) >= 2)
+		.map((p) => ({ ...p }))
+		.sort((a, b) => Math.abs(b.position_change ?? 0) - Math.abs(a.position_change ?? 0));
+
+	notes.push('Weights: Team 50% | Driver 15% | Race pace 15% | Reliability 10% | Circuit 10%');
 
 	return {
 		stage: 'race',
@@ -722,12 +710,9 @@ export async function predictRace(
 	};
 }
 
-// ============ STAGE HELPERS ============
+// ============ HELPERS ============
 
-// Determine which prediction stage is active based on session schedule
-export function getActiveStage(
-	sessions: Session[]
-): 'pre-quali' | 'qualifying' | 'race' {
+export function getActiveStage(sessions: Session[]): 'pre-quali' | 'qualifying' | 'race' {
 	const now = new Date();
 
 	const quali = sessions.find(
@@ -742,7 +727,6 @@ export function getActiveStage(
 	return 'race';
 }
 
-// Get FP session keys for a race weekend
 export function getFPSessionKeys(sessions: Session[]): number[] {
 	return sessions
 		.filter(
