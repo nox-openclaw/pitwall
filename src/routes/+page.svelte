@@ -20,33 +20,29 @@
     MEX: 'MX', BRA: 'BR', LVS: 'US', ABU: 'AE',
   };
 
-  // Circuit short name → F1 media circuit name for layout images
+  // Circuit short name → local image filename (without .png)
   const CIRCUIT_IMAGE_NAME: Record<string, string> = {
-    'Melbourne': 'Australia',
-    'Sakhir': 'Bahrain',
-    'Jeddah': 'Saudi%20Arabia',
-    'Suzuka': 'Japan',
-    'Shanghai': 'China',
-    'Miami': 'Miami',
-    'Monaco': 'Monaco',
-    'Barcelona': 'Spain',
-    'Montréal': 'Canada',
-    'Montreal': 'Canada',
-    'Spielberg': 'Austria',
-    'Silverstone': 'Great%20Britain',
-    'Budapest': 'Hungary',
-    'Spa-Francorchamps': 'Belgium',
-    'Zandvoort': 'Netherlands',
-    'Monza': 'Italy',
-    'Singapore': 'Singapore',
-    'Baku': 'Azerbaijan',
-    'Austin': 'USA',
-    'Mexico City': 'Mexico',
-    'São Paulo': 'Brazil',
-    'Sao Paulo': 'Brazil',
-    'Las Vegas': 'Las%20Vegas',
-    'Lusail': 'Qatar',
-    'Yas Island': 'Abu%20Dhabi',
+    'Melbourne': 'melbourne',
+    'Bahrain': 'bahrain',
+    'Jeddah': 'jeddah',
+    'Suzuka': 'suzuka',
+    'Shanghai': 'shanghai',
+    'Miami': 'miami',
+    'Imola': 'imola',
+    'Monaco': 'monaco',
+    'Catalunya': 'catalunya',
+    'Montreal': 'montreal',
+    'Spielberg': 'spielberg',
+    'Silverstone': 'silverstone',
+    'Budapest': 'budapest',
+    'Zandvoort': 'zandvoort',
+    'Monza': 'monza',
+    'Singapore': 'singapore',
+    'Mexico City': 'mexico_city',
+    'Interlagos': 'interlagos',
+    'Las Vegas': 'las_vegas',
+    'Lusail': 'lusail',
+    'Yas Marina': 'yas_marina',
   };
 
   function countryFlag(code: string): string {
@@ -60,13 +56,7 @@
   function circuitImageUrl(circuitShortName: string): string {
     const name = CIRCUIT_IMAGE_NAME[circuitShortName];
     if (!name) return '';
-    return `https://media.formula1.com/image/upload/f_auto,c_limit,q_75,w_1320/content/dam/fom-website/2018-redesign-assets/Circuit%20maps%2016x9/${name}_Circuit.png`;
-  }
-
-  let failedImages = $state<Set<number>>(new Set());
-
-  function handleImageError(sessionKey: number) {
-    failedImages = new Set([...failedImages, sessionKey]);
+    return `/circuits/${name}.png`;
   }
 
   function formatDate(dateStr: string): string {
@@ -157,12 +147,11 @@
       <div class="absolute top-0 left-0 right-0 h-[2px] bg-pit-accent"></div>
 
       <!-- Circuit layout background -->
-      {#if heroImg && !failedImages.has(latestSession.session_key)}
+      {#if heroImg}
         <img
           src={heroImg}
           alt=""
           class="absolute right-0 top-0 h-full w-auto opacity-[0.25] object-contain pointer-events-none select-none"
-          onerror={() => handleImageError(latestSession!.session_key)}
         />
       {/if}
 
@@ -223,12 +212,11 @@
           <div class="absolute left-0 top-0 bottom-0 w-0 group-hover:w-[2px] bg-pit-accent transition-all duration-150"></div>
 
           <!-- Circuit layout background -->
-          {#if imgUrl && !failedImages.has(session.session_key)}
+          {#if imgUrl}
             <img
               src={imgUrl}
               alt=""
               class="absolute right-0 top-0 h-full w-auto opacity-[0.20] group-hover:opacity-[0.35] object-contain pointer-events-none select-none transition-opacity duration-300"
-              onerror={() => handleImageError(session.session_key)}
             />
           {/if}
 
