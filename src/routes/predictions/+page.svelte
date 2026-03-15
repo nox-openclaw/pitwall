@@ -21,6 +21,7 @@
 		'Track History (2026)': 'Circuit history',
 		'Reliability + ERS': 'Reliability',
 		'Driver Skill': 'Driver skill',
+		'Intel Factors': 'Intel factors',
 	};
 
 	let loading = $state(true);
@@ -380,21 +381,35 @@
 										</button>
 										<div class="space-y-2">
 											{#each pred.factors as factor}
-												<div class="flex items-center gap-3">
-													<span class="text-[10px] text-pit-text-muted w-24 shrink-0 uppercase tracking-wider">
-														{FACTOR_LABELS[factor.name] ?? factor.name}
-													</span>
-													<div class="flex-1 flex items-center gap-2">
-														<div class="flex-1 h-1.5 bg-pit-border rounded-full overflow-hidden">
-															<div
-																class="h-full rounded-full bg-pit-accent"
-																style="width: {(factor.value / (factor.weight / 100)) * 100}%"
-															></div>
+												{#if factor.name === 'Intel Factors'}
+													<div class="flex items-center gap-3 pt-1 mt-1 border-t border-pit-border/50">
+														<span class="text-[10px] w-24 shrink-0 uppercase tracking-wider text-pit-purple">
+															{FACTOR_LABELS[factor.name] ?? factor.name}
+														</span>
+														<div class="flex-1 flex items-center gap-2">
+															<span class="text-[10px] data-mono font-bold {factor.value > 0 ? 'text-pit-green' : factor.value < 0 ? 'text-pit-accent' : 'text-pit-text-muted'}">
+																{factor.value > 0 ? '+' : ''}{factor.value.toFixed(3)}
+															</span>
 														</div>
-														<span class="text-[10px] text-pit-text-muted data-mono w-8 text-right">{factor.weight}%</span>
+														<span class="text-[10px] text-pit-text-dim data-mono shrink-0">{factor.detail}</span>
 													</div>
-													<span class="text-[10px] text-pit-text-dim data-mono shrink-0">{factor.detail}</span>
-												</div>
+												{:else}
+													<div class="flex items-center gap-3">
+														<span class="text-[10px] text-pit-text-muted w-24 shrink-0 uppercase tracking-wider">
+															{FACTOR_LABELS[factor.name] ?? factor.name}
+														</span>
+														<div class="flex-1 flex items-center gap-2">
+															<div class="flex-1 h-1.5 bg-pit-border rounded-full overflow-hidden">
+																<div
+																	class="h-full rounded-full bg-pit-accent"
+																	style="width: {(factor.value / (factor.weight / 100)) * 100}%"
+																></div>
+															</div>
+															<span class="text-[10px] text-pit-text-muted data-mono w-8 text-right">{factor.weight}%</span>
+														</div>
+														<span class="text-[10px] text-pit-text-dim data-mono shrink-0">{factor.detail}</span>
+													</div>
+												{/if}
 											{/each}
 											{#if pred.reliability_warning}
 												<div class="flex items-center gap-2 mt-2 pt-2 border-t border-pit-border">

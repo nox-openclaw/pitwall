@@ -1,6 +1,81 @@
 import { getSessions, getPositions } from './api';
 import type { Session, Driver } from './api';
 
+// ============ INTELLIGENCE FACTORS ============
+
+export interface IntelligenceFactor {
+	_id?: string;
+	team: string;
+	driver?: string;
+	factor_type: string;
+	magnitude: number; // 0-1 scale
+	direction_multiplier: number; // +1 = positive, -1 = negative
+	confidence: number; // 0-1
+	description?: string;
+	source?: string;
+	created_at?: string;
+}
+
+/** Fetch intelligence factors from /api/factors endpoint */
+export async function fetchIntelligenceFactors(): Promise<IntelligenceFactor[]> {
+	try {
+		const base = typeof window === 'undefined' ? 'http://localhost:5173' : '';
+		const res = await fetch(`${base}/api/factors`, { signal: AbortSignal.timeout(5000) });
+		if (!res.ok) return [];
+		const data = await res.json();
+		return Array.isArray(data) ? data : [];
+	} catch {
+		return [];
+	}
+}
+
+/** Factor type -> which score component to adjust */
+const FACTOR_TYPE_MAP: Record<string, 'reliability' | 'car_performance' | 'recent_form'> = {
+	reliability: 'reliability',
+	mechanical_failure: 'reliability',
+	dnf_cause: 'reliability',
+	race_winner: 'car_performance',
+	dominant_performance: 'car_performance',
+	upgrade: 'car_performance',
+	aero_efficiency: 'car_performance',
+	ers_deployment: 'car_performance',
+	poor_performance: 'recent_form',
+	tyre_degradation: 'recent_form',
+};
+
+interface FactorAdjustment {
+	reliability: number;
+	car_performance: number;
+	recent_form: number;
+	applied: IntelligenceFactor[];
+}
+
+/** Calculate per-team factor adjustments, capped at +/- 0.2 */
+function calcFactorAdjustments(
+	factors: IntelligenceFactor[],
+	teamName: string
+): FactorAdjustment {
+	const adj: FactorAdjustment = { reliability: 0, car_performance: 0, recent_form: 0, applied: [] };
+	const CAP = 0.2;
+
+	for (const f of factors) {
+		if (f.team.toLowerCase() !== teamName.toLowerCase()) continue;
+		const component = FACTOR_TYPE_MAP[f.factor_type];
+		if (!component) continue;
+
+		const delta = f.magnitude * f.direction_multiplier * f.confidence;
+		adj[component] += delta;
+		adj.applied.push(f);
+	}
+
+	// Cap each component at +/- 0.2
+	adj.reliability = Math.max(-CAP, Math.min(CAP, adj.reliability));
+	adj.car_performance = Math.max(-CAP, Math.min(CAP, adj.car_performance));
+	adj.recent_form = Math.max(-CAP, Math.min(CAP, adj.recent_form));
+
+	return adj;
+}
+
 // 2026 circuit overtaking factors — Active Aero + Overtake Mode replaces DRS
 // Values recalibrated for wider cars with ground-effect + electric boost within 1s
 export const CIRCUIT_OVERTAKING: Record<string, number> = {
@@ -458,7 +533,8 @@ function scoreDrivers(
 	driverStats: Map<number, DriverStats>,
 	seasonTrend: Map<number, { score: number; detail: string }>,
 	trackHistory: Map<number, { avgPos: number; count: number }>,
-	weights: ReturnType<typeof resolveWeights>
+	weights: ReturnType<typeof resolveWeights>,
+	intelligenceFactors: IntelligenceFactor[] = []
 ): PredictedPosition[] {
 	const maxPos = 20;
 	const scores: {
@@ -551,6 +627,28 @@ function scoreDrivers(
 					: 'No head-to-head data',
 		});
 
+		// Factor 6: Intelligence Factors (adjustment layer)
+		if (intelligenceFactors.length > 0) {
+			const adj = calcFactorAdjustments(intelligenceFactors, d.team_name);
+			const totalAdj = adj.reliability + adj.car_performance + adj.recent_form;
+
+			if (adj.applied.length > 0) {
+				totalScore += totalAdj;
+
+				const details: string[] = [];
+				if (adj.car_performance !== 0) details.push(`car ${adj.car_performance > 0 ? '+' : ''}${adj.car_performance.toFixed(3)}`);
+				if (adj.reliability !== 0) details.push(`rel ${adj.reliability > 0 ? '+' : ''}${adj.reliability.toFixed(3)}`);
+				if (adj.recent_form !== 0) details.push(`form ${adj.recent_form > 0 ? '+' : ''}${adj.recent_form.toFixed(3)}`);
+
+				factors.push({
+					name: 'Intel Factors',
+					weight: 0, // adjustment layer, not a weighted component
+					value: totalAdj,
+					detail: `${adj.applied.length} factor(s): ${details.join(', ')} | ${adj.applied.map(f => f.factor_type).join(', ')}`,
+				});
+			}
+		}
+
 		scores.push({
 			driver_number: d.driver_number,
 			driver: d,
@@ -593,7 +691,10 @@ export async function predictPreQuali(
 ): Promise<StagePrediction> {
 	const notes: string[] = [];
 
-	const { qualiResults, raceResults } = await collect2026Data();
+	const [{ qualiResults, raceResults }, intelligenceFactors] = await Promise.all([
+		collect2026Data(),
+		fetchIntelligenceFactors(),
+	]);
 	notes.push(`Analyzed ${qualiResults.length} qualifying sessions, ${raceResults.length} races from 2026`);
 	notes.push('2026 regs: No DRS — Active Aero + Overtake Mode (electric boost within 1s)');
 	notes.push('50/50 ICE/electric split — MGU-H removed, new ERS failure modes');
@@ -621,7 +722,11 @@ export async function predictPreQuali(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+
+	if (intelligenceFactors.length > 0) {
+		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
+	}
 
 	notes.push(
 		`Weights: Season trend ${Math.round(weights.seasonTrend * 100)}% | Car/team ${Math.round(weights.teamPerformance * 100)}% | Track ${Math.round(weights.trackHistory * 100)}% | Reliability ${Math.round(weights.reliability * 100)}% | Driver ${Math.round(weights.driverSkill * 100)}%`
@@ -638,7 +743,10 @@ export async function predictQualifying(
 ): Promise<StagePrediction> {
 	const notes: string[] = [];
 
-	const { qualiResults, raceResults } = await collect2026Data();
+	const [{ qualiResults, raceResults }, intelligenceFactors] = await Promise.all([
+		collect2026Data(),
+		fetchIntelligenceFactors(),
+	]);
 	notes.push(`Analyzed ${qualiResults.length} qualifying sessions from 2026`);
 	notes.push('2026 regs: Active Aero qualifying — no DRS zones');
 
@@ -665,7 +773,11 @@ export async function predictQualifying(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+
+	if (intelligenceFactors.length > 0) {
+		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
+	}
 
 	const q1Dropouts = predictions.slice(15);
 	const q2Dropouts = predictions.slice(10, 15);
@@ -690,7 +802,10 @@ export async function predictRace(
 	const notes: string[] = [];
 	const overtakingFactor = CIRCUIT_OVERTAKING[circuitShortName] ?? 0.6;
 
-	const { qualiResults, raceResults } = await collect2026Data();
+	const [{ qualiResults, raceResults }, intelligenceFactors] = await Promise.all([
+		collect2026Data(),
+		fetchIntelligenceFactors(),
+	]);
 	notes.push(`Analyzed ${raceResults.length} races, ${qualiResults.length} qualifyings from 2026`);
 	notes.push('2026 regs: Overtake Mode replaces DRS — electric boost within 1s of car ahead');
 
@@ -721,7 +836,11 @@ export async function predictRace(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+
+	if (intelligenceFactors.length > 0) {
+		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
+	}
 
 	// Calculate position changes from grid
 	for (const pred of predictions) {
