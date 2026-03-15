@@ -241,11 +241,11 @@
 		<!-- Stage Description -->
 		<div class="mb-6 text-xs text-pit-text-dim">
 			{#if activeTab === 'pre-quali'}
-				Predicted grid based on historical circuit data, recent form, and teammate qualifying battles.
+				Data-driven grid prediction using 2026 team performance (60%), circuit history (25%), and recent driver form (15%).
 			{:else if activeTab === 'qualifying'}
-				Qualifying prediction refined with practice session pace and historical circuit performance.
+				Qualifying prediction blending 2026 car baselines with practice pace and circuit-specific team performance.
 			{:else}
-				Race outcome prediction using grid position, overtaking difficulty, and historical race pace.
+				Race outcome using team performance, grid position adjusted for overtaking difficulty, and race vs quali deltas.
 			{/if}
 		</div>
 
@@ -452,17 +452,16 @@
 								<span class="text-pit-text">OpenF1 API</span>
 							</div>
 							<div class="flex justify-between">
-								<span class="text-pit-text-muted">Historical years</span>
-								<span class="text-pit-text">2023-2025</span>
+								<span class="text-pit-text-muted">Primary signal</span>
+								<span class="text-pit-text">2026 team perf (60%)</span>
 							</div>
 							<div class="flex justify-between">
-								<span class="text-pit-text-muted">Factors weighted</span>
-								<span class="text-pit-text">
-									{#if activeTab === 'pre-quali'}3
-									{:else if activeTab === 'qualifying'}2
-									{:else}4
-									{/if}
-								</span>
+								<span class="text-pit-text-muted">Circuit history</span>
+								<span class="text-pit-text">2024-2025 (25%)</span>
+							</div>
+							<div class="flex justify-between">
+								<span class="text-pit-text-muted">Recent form</span>
+								<span class="text-pit-text">Last 3 races (15%)</span>
 							</div>
 							<div class="flex justify-between">
 								<span class="text-pit-text-muted">Stage</span>
