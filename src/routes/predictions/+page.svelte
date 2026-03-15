@@ -11,6 +11,7 @@
 		CIRCUIT_OVERTAKING,
 		type PredictedPosition,
 		type StagePrediction,
+		type AppliedFactor,
 	} from '$lib/predictions';
 
 	type Stage = 'pre-quali' | 'qualifying' | 'race';
@@ -417,6 +418,20 @@
 													<span class="text-[10px] text-pit-yellow data-mono">
 														RELIABILITY WARNING — {(pred.dnf_rate * 100).toFixed(0)}% DNF rate in 2026
 													</span>
+												</div>
+											{/if}
+											{#if pred.applied_factors && pred.applied_factors.length > 0}
+												<div class="mt-2 pt-2 border-t border-pit-border/50">
+													<div class="text-[10px] uppercase tracking-widest text-pit-purple mb-1.5">Intelligence Insights</div>
+													<div class="space-y-1">
+														{#each pred.applied_factors as af}
+															<div class="flex items-start gap-1.5 text-[10px] data-mono">
+																<span class="shrink-0 mt-px">{af.direction === 'up' ? '📈' : '📉'}</span>
+																<span class="text-pit-text">{af.description}</span>
+																<span class="text-pit-text-muted ml-auto shrink-0">{af.source}</span>
+															</div>
+														{/each}
+													</div>
 												</div>
 											{/if}
 										</div>

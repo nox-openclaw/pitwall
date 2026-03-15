@@ -7,6 +7,7 @@ export interface IntelligenceFactor {
 	_id?: string;
 	team: string;
 	driver?: string;
+	circuit?: string;
 	factor_type: string;
 	magnitude: number; // 0-1 scale
 	direction_multiplier: number; // +1 = positive, -1 = negative
@@ -17,10 +18,14 @@ export interface IntelligenceFactor {
 }
 
 /** Fetch intelligence factors from /api/factors endpoint */
-export async function fetchIntelligenceFactors(): Promise<IntelligenceFactor[]> {
+export async function fetchIntelligenceFactors(team?: string, circuit?: string): Promise<IntelligenceFactor[]> {
 	try {
 		const base = typeof window === 'undefined' ? 'http://localhost:5173' : '';
-		const res = await fetch(`${base}/api/factors`, { signal: AbortSignal.timeout(5000) });
+		const params = new URLSearchParams();
+		if (team) params.set('team', team);
+		if (circuit) params.set('circuit', circuit);
+		const qs = params.toString();
+		const res = await fetch(`${base}/api/factors${qs ? `?${qs}` : ''}`, { signal: AbortSignal.timeout(5000) });
 		if (!res.ok) return [];
 		const data = await res.json();
 		return Array.isArray(data) ? data : [];
@@ -29,49 +34,91 @@ export async function fetchIntelligenceFactors(): Promise<IntelligenceFactor[]> 
 	}
 }
 
-/** Factor type -> which score component to adjust */
-const FACTOR_TYPE_MAP: Record<string, 'reliability' | 'car_performance' | 'recent_form'> = {
-	reliability: 'reliability',
-	mechanical_failure: 'reliability',
-	dnf_cause: 'reliability',
-	race_winner: 'car_performance',
-	dominant_performance: 'car_performance',
-	upgrade: 'car_performance',
-	aero_efficiency: 'car_performance',
-	ers_deployment: 'car_performance',
-	poor_performance: 'recent_form',
-	tyre_degradation: 'recent_form',
-};
-
-interface FactorAdjustment {
-	reliability: number;
-	car_performance: number;
-	recent_form: number;
-	applied: IntelligenceFactor[];
+export interface AppliedFactor {
+	factor_type: string;
+	description: string;
+	source: string;
+	direction: 'up' | 'down';
+	component: string;
+	delta: number;
 }
 
-/** Calculate per-team factor adjustments, capped at +/- 0.2 */
+interface FactorAdjustment {
+	reliability_mult: number;
+	car_performance_delta: number;
+	recent_form_delta: number;
+	applied: AppliedFactor[];
+}
+
+/**
+ * Calculate per-team factor adjustments using multiplicative/additive rules:
+ * - reliability/mechanical_failure/dnf_cause: multiply reliability by (1 - mag*conf*0.3)
+ * - race_winner/dominant_performance: boost car_performance by mag*conf*0.15
+ * - poor_performance/tyre_degradation: reduce recent_form by mag*conf*0.2
+ * - upgrade/aero_efficiency/ers_deployment: boost car_performance by mag*conf*0.1
+ */
 function calcFactorAdjustments(
 	factors: IntelligenceFactor[],
-	teamName: string
+	teamName: string,
+	circuitShortName?: string
 ): FactorAdjustment {
-	const adj: FactorAdjustment = { reliability: 0, car_performance: 0, recent_form: 0, applied: [] };
-	const CAP = 0.2;
+	const adj: FactorAdjustment = { reliability_mult: 1, car_performance_delta: 0, recent_form_delta: 0, applied: [] };
 
 	for (const f of factors) {
 		if (f.team.toLowerCase() !== teamName.toLowerCase()) continue;
-		const component = FACTOR_TYPE_MAP[f.factor_type];
-		if (!component) continue;
+		// If factor has a circuit field, only apply if it matches
+		const fCircuit = f.circuit;
+		if (fCircuit && circuitShortName && fCircuit.toLowerCase() !== circuitShortName.toLowerCase()) continue;
 
-		const delta = f.magnitude * f.direction_multiplier * f.confidence;
-		adj[component] += delta;
-		adj.applied.push(f);
+		const mc = f.magnitude * f.confidence;
+		let direction: 'up' | 'down' = f.direction_multiplier >= 0 ? 'up' : 'down';
+		let component = '';
+		let delta = 0;
+
+		switch (f.factor_type) {
+			case 'reliability':
+			case 'mechanical_failure':
+			case 'dnf_cause':
+				adj.reliability_mult *= (1 - mc * 0.3);
+				component = 'reliability';
+				delta = -(mc * 0.3);
+				direction = 'down';
+				break;
+			case 'race_winner':
+			case 'dominant_performance':
+				delta = mc * 0.15;
+				adj.car_performance_delta += delta;
+				component = 'car_performance';
+				direction = 'up';
+				break;
+			case 'poor_performance':
+			case 'tyre_degradation':
+				delta = -(mc * 0.2);
+				adj.recent_form_delta += delta;
+				component = 'recent_form';
+				direction = 'down';
+				break;
+			case 'upgrade':
+			case 'aero_efficiency':
+			case 'ers_deployment':
+				delta = mc * 0.1;
+				adj.car_performance_delta += delta;
+				component = 'car_performance';
+				direction = 'up';
+				break;
+			default:
+				continue;
+		}
+
+		adj.applied.push({
+			factor_type: f.factor_type,
+			description: f.description ?? f.factor_type,
+			source: f.source ?? 'intelligence',
+			direction,
+			component,
+			delta,
+		});
 	}
-
-	// Cap each component at +/- 0.2
-	adj.reliability = Math.max(-CAP, Math.min(CAP, adj.reliability));
-	adj.car_performance = Math.max(-CAP, Math.min(CAP, adj.car_performance));
-	adj.recent_form = Math.max(-CAP, Math.min(CAP, adj.recent_form));
 
 	return adj;
 }
@@ -111,6 +158,7 @@ export interface PredictedPosition {
 	confidence: number;
 	position_change?: number;
 	factors: FactorBreakdown[];
+	applied_factors: AppliedFactor[];
 	reliability_warning: boolean;
 	dnf_rate: number; // 0-1
 	expected_race_delta?: number; // avg positions gained/lost grid->finish
@@ -534,7 +582,8 @@ function scoreDrivers(
 	seasonTrend: Map<number, { score: number; detail: string }>,
 	trackHistory: Map<number, { avgPos: number; count: number }>,
 	weights: ReturnType<typeof resolveWeights>,
-	intelligenceFactors: IntelligenceFactor[] = []
+	intelligenceFactors: IntelligenceFactor[] = [],
+	circuitShortName?: string
 ): PredictedPosition[] {
 	const maxPos = 20;
 	const scores: {
@@ -542,6 +591,7 @@ function scoreDrivers(
 		driver: Driver | null;
 		total_score: number;
 		factors: FactorBreakdown[];
+		applied_factors: AppliedFactor[];
 		reliability_warning: boolean;
 		dnf_rate: number;
 		expected_race_delta: number;
@@ -553,13 +603,11 @@ function scoreDrivers(
 		const trend = seasonTrend.get(d.driver_number);
 		const th = trackHistory.get(d.driver_number);
 		const factors: FactorBreakdown[] = [];
-		let totalScore = 0;
 
 		// Factor 1: Season Trend (40%)
 		const trendAvg = trend?.score ?? 10;
-		const trendScore = (maxPos + 1 - Math.min(trendAvg, maxPos)) / maxPos;
+		let trendScore = (maxPos + 1 - Math.min(trendAvg, maxPos)) / maxPos;
 		const trendContrib = trendScore * weights.seasonTrend;
-		totalScore += trendContrib;
 		factors.push({
 			name: 'Season Trend',
 			weight: Math.round(weights.seasonTrend * 100),
@@ -569,13 +617,11 @@ function scoreDrivers(
 
 		// Factor 2: Car/Team Performance (35%)
 		const teamAvg = ts?.avg_quali_position ?? 10;
-		const teamScore = (maxPos + 1 - Math.min(teamAvg, maxPos)) / maxPos;
-		const teamContrib = teamScore * weights.teamPerformance;
-		totalScore += teamContrib;
+		let teamScore = (maxPos + 1 - Math.min(teamAvg, maxPos)) / maxPos;
 		factors.push({
 			name: 'Car/Team Performance',
 			weight: Math.round(weights.teamPerformance * 100),
-			value: teamContrib,
+			value: teamScore * weights.teamPerformance,
 			detail: `Avg 2026 quali P${teamAvg.toFixed(1)}`,
 		});
 
@@ -583,12 +629,10 @@ function scoreDrivers(
 		const histAvg = th?.avgPos ?? 10;
 		const histCount = th?.count ?? 0;
 		const histScore = (maxPos + 1 - Math.min(histAvg, maxPos)) / maxPos;
-		const histContrib = histScore * weights.trackHistory;
-		totalScore += histContrib;
 		factors.push({
 			name: 'Track History (2026)',
 			weight: Math.round(weights.trackHistory * 100),
-			value: histContrib,
+			value: histScore * weights.trackHistory,
 			detail:
 				histCount > 0
 					? `Avg P${histAvg.toFixed(1)} at this track in 2026 (${histCount} sessions)`
@@ -597,13 +641,11 @@ function scoreDrivers(
 
 		// Factor 4: Reliability + ERS (10%)
 		const dnfRate = ts?.dnf_rate ?? 0;
-		const reliabilityScore = 1 - dnfRate;
-		const reliabilityContrib = reliabilityScore * weights.reliability;
-		totalScore += reliabilityContrib;
+		let reliabilityScore = 1 - dnfRate;
 		factors.push({
 			name: 'Reliability + ERS',
 			weight: Math.round(weights.reliability * 100),
-			value: reliabilityContrib,
+			value: reliabilityScore * weights.reliability,
 			detail:
 				ts && ts.races_started > 0
 					? `${ts.dnfs} DNFs in ${ts.races_started} starts (${(dnfRate * 100).toFixed(0)}% — incl. ERS/hybrid failures)`
@@ -615,7 +657,6 @@ function scoreDrivers(
 		const battles = ds?.teammate_battles_total ?? 0;
 		const skillScore = battles > 0 ? Math.max(0, Math.min(1, 0.5 - delta / (battles * 2))) : 0.5;
 		const skillContrib = skillScore * weights.driverSkill;
-		totalScore += skillContrib;
 		const wonBattles = ds?.teammate_battles_won ?? 0;
 		factors.push({
 			name: 'Driver Skill',
@@ -627,33 +668,53 @@ function scoreDrivers(
 					: 'No head-to-head data',
 		});
 
-		// Factor 6: Intelligence Factors (adjustment layer)
+		// Factor 6: Intelligence Factors — multiplicative adjustments on component scores
+		let appliedFactors: AppliedFactor[] = [];
 		if (intelligenceFactors.length > 0) {
-			const adj = calcFactorAdjustments(intelligenceFactors, d.team_name);
-			const totalAdj = adj.reliability + adj.car_performance + adj.recent_form;
+			const adj = calcFactorAdjustments(intelligenceFactors, d.team_name, circuitShortName);
+			appliedFactors = adj.applied;
 
 			if (adj.applied.length > 0) {
-				totalScore += totalAdj;
+				// Apply multiplicative reliability adjustment
+				reliabilityScore *= adj.reliability_mult;
+				// Apply additive car performance and recent form adjustments
+				teamScore += adj.car_performance_delta;
+				trendScore += adj.recent_form_delta;
+
+				const totalAdj = (reliabilityScore * weights.reliability - factors[3].value)
+					+ adj.car_performance_delta * weights.teamPerformance
+					+ adj.recent_form_delta * weights.seasonTrend;
 
 				const details: string[] = [];
-				if (adj.car_performance !== 0) details.push(`car ${adj.car_performance > 0 ? '+' : ''}${adj.car_performance.toFixed(3)}`);
-				if (adj.reliability !== 0) details.push(`rel ${adj.reliability > 0 ? '+' : ''}${adj.reliability.toFixed(3)}`);
-				if (adj.recent_form !== 0) details.push(`form ${adj.recent_form > 0 ? '+' : ''}${adj.recent_form.toFixed(3)}`);
+				if (adj.car_performance_delta !== 0) details.push(`car ${adj.car_performance_delta > 0 ? '+' : ''}${adj.car_performance_delta.toFixed(3)}`);
+				if (adj.reliability_mult !== 1) details.push(`rel ×${adj.reliability_mult.toFixed(3)}`);
+				if (adj.recent_form_delta !== 0) details.push(`form ${adj.recent_form_delta > 0 ? '+' : ''}${adj.recent_form_delta.toFixed(3)}`);
 
 				factors.push({
 					name: 'Intel Factors',
-					weight: 0, // adjustment layer, not a weighted component
+					weight: 0,
 					value: totalAdj,
 					detail: `${adj.applied.length} factor(s): ${details.join(', ')} | ${adj.applied.map(f => f.factor_type).join(', ')}`,
 				});
 			}
 		}
 
+		// Compute total score from (possibly adjusted) component scores
+		let totalScore = trendScore * weights.seasonTrend
+			+ teamScore * weights.teamPerformance
+			+ histScore * weights.trackHistory
+			+ reliabilityScore * weights.reliability
+			+ skillContrib;
+
+		// Clamp final score between 0.05 and 0.95
+		totalScore = Math.max(0.05, Math.min(0.95, totalScore));
+
 		scores.push({
 			driver_number: d.driver_number,
 			driver: d,
 			total_score: totalScore,
 			factors,
+			applied_factors: appliedFactors,
 			reliability_warning: dnfRate > 0.2,
 			dnf_rate: dnfRate,
 			expected_race_delta: ds?.avg_race_delta ?? 0,
@@ -675,6 +736,7 @@ function scoreDrivers(
 			predicted_position: i + 1,
 			confidence,
 			factors: s.factors,
+			applied_factors: s.applied_factors,
 			reliability_warning: s.reliability_warning,
 			dnf_rate: s.dnf_rate,
 			expected_race_delta: s.expected_race_delta,
@@ -722,7 +784,7 @@ export async function predictPreQuali(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors, circuitShortName);
 
 	if (intelligenceFactors.length > 0) {
 		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
@@ -773,7 +835,7 @@ export async function predictQualifying(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors, circuitShortName);
 
 	if (intelligenceFactors.length > 0) {
 		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
@@ -836,7 +898,7 @@ export async function predictRace(
 		}
 	}
 
-	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors);
+	const predictions = scoreDrivers(currentDrivers, teamStats, driverStats, seasonTrend, trackHistory, weights, intelligenceFactors, circuitShortName);
 
 	if (intelligenceFactors.length > 0) {
 		notes.push(`Intelligence factors: ${intelligenceFactors.length} applied`);
