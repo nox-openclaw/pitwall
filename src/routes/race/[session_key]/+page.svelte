@@ -145,13 +145,13 @@
     {@const heroImg = circuitImageUrl(session.circuit_short_name)}
     <!-- Hero circuit image -->
     {#if heroImg}
-      <div class="relative w-full h-[300px] mb-8 overflow-hidden border border-pit-border">
+      <div class="relative w-full h-[300px] mb-8 overflow-hidden border border-pit-border bg-[#1a1a2e]">
         <img
           src={heroImg}
           alt="{session.circuit_short_name} circuit layout"
-          class="absolute inset-0 w-full h-full object-contain"
+          class="absolute inset-0 w-full h-full object-contain p-8 opacity-70"
         />
-        <div class="absolute inset-0 bg-gradient-to-t from-pit-bg via-pit-bg/60 to-transparent"></div>
+        <div class="absolute inset-0 bg-gradient-to-t from-pit-bg via-pit-bg/40 to-transparent"></div>
         <div class="absolute bottom-0 left-0 right-0 p-6 z-10">
           <div class="flex items-center gap-3 mb-2">
             <div class="w-1 h-6 bg-pit-accent"></div>
