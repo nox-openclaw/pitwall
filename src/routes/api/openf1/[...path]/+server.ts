@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 
-const UPSTREAM = 'https://api.openf1.org/v1';
+const UPSTREAM = 'https://openf1-api.sliplane.app/v1';
 const CACHE_TTL = 10_000; // 10 seconds
 
 const cache = new Map<string, { data: ArrayBuffer; headers: Headers; timestamp: number }>();
