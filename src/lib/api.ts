@@ -1,4 +1,4 @@
-const BASE = 'https://api.openf1.org/v1';
+const BASE = '/api/openf1';
 
 async function fetchApi<T>(endpoint: string, params?: Record<string, string | number>): Promise<T> {
   const url = new URL(`${BASE}${endpoint}`);
