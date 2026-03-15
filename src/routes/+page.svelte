@@ -161,7 +161,7 @@
         <img
           src={heroImg}
           alt=""
-          class="absolute right-0 top-0 h-full w-auto opacity-[0.07] object-contain pointer-events-none select-none"
+          class="absolute right-0 top-0 h-full w-auto opacity-[0.25] object-contain pointer-events-none select-none"
           onerror={() => handleImageError(latestSession!.session_key)}
         />
       {/if}
@@ -227,7 +227,7 @@
             <img
               src={imgUrl}
               alt=""
-              class="absolute right-0 top-0 h-full w-auto opacity-[0.06] group-hover:opacity-[0.12] object-contain pointer-events-none select-none transition-opacity duration-300"
+              class="absolute right-0 top-0 h-full w-auto opacity-[0.20] group-hover:opacity-[0.35] object-contain pointer-events-none select-none transition-opacity duration-300"
               onerror={() => handleImageError(session.session_key)}
             />
           {/if}
